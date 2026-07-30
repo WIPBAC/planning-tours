@@ -83,6 +83,11 @@
     flex-wrap:wrap;
   }
   .legend .dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px;}
+  /* Le texte d'aide change à chaque survol pendant un glisser-déposer :
+     il occupe l'espace restant et se tronque, pour que sa longueur ne
+     décale jamais les boutons ni ne fasse changer la barre de hauteur. */
+  #clipStatus{ flex:1 1 220px; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .legend-actions{ display:flex; align-items:center; gap:10px; margin-left:auto; flex:0 0 auto; }
   .conn{ display:inline-flex; align-items:center; gap:5px; font-weight:700; }
   .conn .bead{ width:8px; height:8px; border-radius:50%; background:#b7bec9; }
   .conn.ok .bead{ background:#2fa34f; }
@@ -186,12 +191,14 @@
   <span><span class="dot" style="background:var(--card);border:1px solid var(--line)"></span>Disponible</span>
   <span><span class="dot" style="background:var(--grey)"></span>Week-end</span>
   <span id="clipStatus" style="color:#8a919c;">Glissez une étiquette vers un autre jour de la même ligne pour répartir sur toute la plage · Ctrl+glissez pour copier sur ce seul jour · vers une autre personne pour déplacer (Ctrl+glisser pour copier)</span>
-  <span class="conn" id="connStatus" style="margin-left:auto;"><span class="bead"></span><span class="conn-label">…</span></span>
+  <span class="legend-actions">
+  <span class="conn" id="connStatus"><span class="bead"></span><span class="conn-label">…</span></span>
   <span id="roBadge" style="display:none;background:#fdf0e8;color:var(--accent-ink);border:1px solid #f3d3c2;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;">Lecture seule</span>
   <button id="btnAdmin" style="display:none;border:1px solid var(--line);background:#fff;color:var(--navy);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;">Admin</button>
   <button id="btnManageTeam" style="border:1px solid var(--line);background:#fff;color:var(--navy);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;">Gérer l'équipe</button>
   <button id="btnManage" style="border:1px solid var(--line);background:#fff;color:var(--navy);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;">Gérer les dossiers</button>
   <button id="btnLogout" style="display:none;border:1px solid var(--line);background:#fff;color:#c0392b;padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;">Déconnexion</button>
+  </span>
 </div>
 
 <div class="wrap"><table id="grid"></table></div>
@@ -778,7 +785,10 @@ function previewDrag(targetEmp, targetDay, ctrlHeld){
 
 function setStatus(msg){
   const el = document.getElementById('clipStatus');
-  el.textContent = msg || "Glissez une étiquette vers un autre jour de la même ligne pour répartir sur toute la plage · Ctrl+glissez pour copier sur ce seul jour · vers une autre personne pour déplacer (Ctrl+glisser pour copier)";
+  if(!el) return;
+  const text = msg || "Glissez une étiquette vers un autre jour de la même ligne pour répartir sur toute la plage · Ctrl+glissez pour copier sur ce seul jour · vers une autre personne pour déplacer (Ctrl+glisser pour copier)";
+  el.textContent = text;
+  el.title = text; // le texte est tronqué à l'écran : on le garde lisible au survol
 }
 
 function handleCellClick(emp, day, e){
