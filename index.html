@@ -190,7 +190,7 @@
   <span id="missionLegend" style="display:flex;gap:12px;flex-wrap:wrap;"></span>
   <span><span class="dot" style="background:var(--card);border:1px solid var(--line)"></span>Disponible</span>
   <span><span class="dot" style="background:var(--grey)"></span>Week-end</span>
-  <span id="clipStatus" style="color:#8a919c;">Glissez une étiquette sur la même ligne pour répartir sur une plage de jours · sur la même colonne pour l'affecter à plusieurs personnes · Ctrl+glissez pour copier sur une seule case · Maj+glissez vers une autre personne pour déplacer</span>
+  <span id="clipStatus" style="color:#8a919c;">Glissez une étiquette sur la même ligne pour répartir sur une plage de jours · sur la même colonne pour l'affecter à plusieurs personnes · Ctrl+glissez pour copier sur une seule case · Maj+glissez vers une autre personne pour déplacer · Clic droit sur une étiquette pour la supprimer</span>
   <span class="legend-actions">
   <span class="conn" id="connStatus"><span class="bead"></span><span class="conn-label">…</span></span>
   <span id="roBadge" style="display:none;background:#fdf0e8;color:var(--accent-ink);border:1px solid #f3d3c2;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;">Lecture seule</span>
@@ -720,7 +720,7 @@ function renderGrid(){
       }else if(list.length){
         content = '<div class="chips">' + list.map(item=>{
           const c = missionColor(item.type);
-          return `<span class="chip" ${editable?'draggable="true"':''} data-emp="${escapeHtml(emp)}" data-day="${d}" data-name="${escapeHtml(item.name)}" data-type="${item.type}" style="background:${c.bg};color:${c.ink};" title="${escapeHtml(item.name)} — ${c.label}${editable?' — glissez pour déplacer':''}">${escapeHtml(item.name)}</span>`;
+          return `<span class="chip" ${editable?'draggable="true"':''} data-emp="${escapeHtml(emp)}" data-day="${d}" data-name="${escapeHtml(item.name)}" data-type="${item.type}" style="background:${c.bg};color:${c.ink};" title="${escapeHtml(item.name)} — ${c.label}${editable?' — glissez pour déplacer, clic droit pour supprimer':''}">${escapeHtml(item.name)}</span>`;
         }).join('') + '</div>';
       }else{
         content = editable ? '<div class="empty-hint">+</div>' : '';
@@ -761,7 +761,31 @@ function renderGrid(){
       dragSource = null;
       setStatus();
     });
+    // clic droit : suppression immédiate, sans passer par la fenêtre d'édition
+    chip.addEventListener('contextmenu', (e)=>{
+      e.preventDefault();
+      e.stopPropagation();
+      deleteAssignment(chip.dataset.emp, parseInt(chip.dataset.day, 10), chip.dataset.name);
+    });
   });
+}
+
+async function deleteAssignment(emp, day, name){
+  if(!canEdit()) return;
+  mutating = true;
+  try{
+    // on repart de l'état serveur pour ne pas écraser les modifications des collègues
+    if(!(await refreshMonthFromServer())){
+      toast("Connexion perdue — action annulée", true);
+      return;
+    }
+    removeAssignment(emp, day, name);
+    await saveMonth(currentMonth);
+    renderGrid();
+    toast(`« ${name} » supprimé`);
+  }finally{
+    mutating = false;
+  }
 }
 
 let dragSource = null; // {emp, day, name} — mémorisé au dragstart pour l'aperçu en direct
@@ -800,7 +824,7 @@ function previewDrag(targetEmp, targetDay, ctrlHeld, shiftHeld){
 function setStatus(msg){
   const el = document.getElementById('clipStatus');
   if(!el) return;
-  const text = msg || "Glissez une étiquette sur la même ligne pour répartir sur une plage de jours · sur la même colonne pour l'affecter à plusieurs personnes · Ctrl+glissez pour copier sur une seule case · Maj+glissez vers une autre personne pour déplacer";
+  const text = msg || "Glissez une étiquette sur la même ligne pour répartir sur une plage de jours · sur la même colonne pour l'affecter à plusieurs personnes · Ctrl+glissez pour copier sur une seule case · Maj+glissez vers une autre personne pour déplacer · Clic droit sur une étiquette pour la supprimer";
   el.textContent = text;
   el.title = text; // le texte est tronqué à l'écran : on le garde lisible au survol
 }
