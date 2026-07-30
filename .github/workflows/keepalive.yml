@@ -1,0 +1,14 @@
+name: Keepalive Supabase
+on:
+  schedule:
+    - cron: '0 6 * * 1,4'   # lundi et jeudi à 6h UTC
+  workflow_dispatch:         # permet aussi un lancement manuel
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase
+        run: |
+          curl -s -f "https://tjsufmaclrdbplgewjos.supabase.co/rest/v1/keepalive?select=id" \
+            -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRqc3VmbWFjbHJkYnBsZ2V3am9zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU0MDAxNDEsImV4cCI6MjEwMDk3NjE0MX0.AN8Heijqe0cdWvaytKPWypmxMDru-YQj9bGMza-lXTU" \
+            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRqc3VmbWFjbHJkYnBsZ2V3am9zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU0MDAxNDEsImV4cCI6MjEwMDk3NjE0MX0.AN8Heijqe0cdWvaytKPWypmxMDru-YQj9bGMza-lXTU"
