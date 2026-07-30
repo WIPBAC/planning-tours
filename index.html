@@ -112,6 +112,8 @@
     padding:4px; vertical-align:top; cursor:pointer; min-height:52px; height:52px;
   }
   td.daycell.weekend{ background:var(--grey); cursor:default; }
+  td.daycell.readonly{ cursor:default; }
+  td.daycell.readonly:hover{ outline:none; }
   td.daycell:hover{ outline:2px solid var(--focus); outline-offset:-2px; }
   td.daycell.drop-target{ outline:2px dashed var(--accent); outline-offset:-2px; background:#fff3ee; }
   .chips{ display:flex; flex-wrap:wrap; gap:3px; }
@@ -185,6 +187,7 @@
   <span><span class="dot" style="background:var(--grey)"></span>Week-end</span>
   <span id="clipStatus" style="color:#8a919c;">Glissez une étiquette vers un autre jour de la même ligne pour répartir sur toute la plage · Ctrl+glissez pour copier sur ce seul jour · vers une autre personne pour déplacer (Ctrl+glisser pour copier)</span>
   <span class="conn" id="connStatus" style="margin-left:auto;"><span class="bead"></span><span class="conn-label">…</span></span>
+  <span id="roBadge" style="display:none;background:#fdf0e8;color:var(--accent-ink);border:1px solid #f3d3c2;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;">Lecture seule</span>
   <button id="btnAdmin" style="display:none;border:1px solid var(--line);background:#fff;color:var(--navy);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;">Admin</button>
   <button id="btnManageTeam" style="border:1px solid var(--line);background:#fff;color:var(--navy);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;">Gérer l'équipe</button>
   <button id="btnManage" style="border:1px solid var(--line);background:#fff;color:var(--navy);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;">Gérer les dossiers</button>
@@ -254,9 +257,15 @@ async function kvSet(key, value){
 
 /* ============================================================
    CONTRÔLE D'ACCÈS
-   Chaque compte Microsoft doit être activé par un administrateur
-   avant de pouvoir consulter le planning. Un compte qui se
-   connecte pour la première fois est enregistré désactivé.
+   Deux droits, cumulables, gérés depuis la fenêtre « Admin » :
+     · Actif → peut modifier le planning
+     · Admin → peut rendre les autres actifs ou admins
+   Tout compte connecté voit le planning ; sans le droit « Actif »
+   il est en lecture seule. Un compte qui se connecte pour la
+   première fois arrive donc en lecture seule.
+
+   Personne ne peut modifier sa propre ligne, et les quatre
+   administrateurs permanents ne sont modifiables par personne.
 
    Note : Entra ID ne transmet à l'application que l'identité du
    compte connecté, pas la liste des membres du groupe BAC Tours.
@@ -288,11 +297,18 @@ function userRecord(email){
   return { email: e, seed, active: seed ? true : !!rec.active, admin: seed ? true : !!rec.admin };
 }
 
-function hasAccess(email){ return userRecord(email).active; }
-
 // En mode local (Supabase non configuré) il n'y a pas d'authentification :
 // on laisse la main complète pour pouvoir tester l'interface.
 function currentIsAdmin(){ return !sb ? true : userRecord(currentUserEmail).admin; }
+
+// Droit de modifier le planning et les listes (dossiers, équipe).
+function canEdit(){ return !sb ? true : userRecord(currentUserEmail).active; }
+
+// Une ligne est verrouillée pour les admins permanents et pour soi-même.
+function isLockedRow(email){
+  const e = normEmail(email);
+  return isSeedAdmin(e) || (!!currentUserEmail && e === normEmail(currentUserEmail));
+}
 
 async function loadAccess(){
   const val = await kvGet(ACCESS_KEY);
@@ -321,7 +337,7 @@ async function registerCurrentUser(email){
 
 async function updateAccess(email, patch){
   const e = normEmail(email);
-  if(isSeedAdmin(e)) return;
+  if(!currentIsAdmin() || isLockedRow(e)) return;
   await loadAccess(); // on repart de l'état serveur pour ne pas écraser un autre admin
   const rec = accessList[e] || { active: false, admin: false };
   accessList[e] = {
@@ -335,7 +351,7 @@ async function updateAccess(email, patch){
 
 async function removeAccess(email){
   const e = normEmail(email);
-  if(isSeedAdmin(e)) return;
+  if(!currentIsAdmin() || isLockedRow(e)) return;
   await loadAccess();
   delete accessList[e];
   const ok = await persistAccess();
@@ -343,9 +359,14 @@ async function removeAccess(email){
   toast(ok ? 'Utilisateur retiré' : "Échec de l'enregistrement", !ok);
 }
 
-function applyAdminVisibility(){
-  const btn = document.getElementById('btnAdmin');
-  if(btn) btn.style.display = currentIsAdmin() ? '' : 'none';
+function applyPermissions(){
+  const edit = canEdit();
+  const show = (id, on)=>{ const el = document.getElementById(id); if(el) el.style.display = on ? '' : 'none'; };
+  show('btnAdmin', currentIsAdmin());
+  show('btnManage', edit);
+  show('btnManageTeam', edit);
+  show('roBadge', !edit);
+  setStatus(edit ? null : "Lecture seule : vous pouvez consulter le planning mais pas le modifier. Demandez à un administrateur de vous activer.");
 }
 
 let monthData = {}; // { "1": {"Amina": [{name,type}, ...]}, ... } for the currently loaded month
@@ -600,6 +621,7 @@ async function switchMonth(i){
 }
 
 function renderGrid(){
+  const editable = canEdit();
   const nd = daysInMonth(currentMonth);
   const table = document.getElementById('grid');
   let thead = '<thead><tr><th class="namecol">Employé</th>';
@@ -623,18 +645,20 @@ function renderGrid(){
       }else if(list.length){
         content = '<div class="chips">' + list.map(item=>{
           const c = missionColor(item.type);
-          return `<span class="chip" draggable="true" data-emp="${escapeHtml(emp)}" data-day="${d}" data-name="${escapeHtml(item.name)}" data-type="${item.type}" style="background:${c.bg};color:${c.ink};" title="${escapeHtml(item.name)} — ${c.label} — glissez pour déplacer">${escapeHtml(item.name)}</span>`;
+          return `<span class="chip" ${editable?'draggable="true"':''} data-emp="${escapeHtml(emp)}" data-day="${d}" data-name="${escapeHtml(item.name)}" data-type="${item.type}" style="background:${c.bg};color:${c.ink};" title="${escapeHtml(item.name)} — ${c.label}${editable?' — glissez pour déplacer':''}">${escapeHtml(item.name)}</span>`;
         }).join('') + '</div>';
       }else{
-        content = '<div class="empty-hint">+</div>';
+        content = editable ? '<div class="empty-hint">+</div>' : '';
       }
-      tbody += `<td class="daycell ${weekend?'weekend':''}" data-emp="${escapeHtml(emp)}" data-day="${d}">${content}</td>`;
+      tbody += `<td class="daycell ${weekend?'weekend':''} ${editable?'':'readonly'}" data-emp="${escapeHtml(emp)}" data-day="${d}">${content}</td>`;
     }
     tbody += '</tr>';
   });
   tbody += '</tbody>';
 
   table.innerHTML = thead + tbody;
+
+  if(!editable) return; // lecture seule : aucun clic ni glisser-déposer
 
   table.querySelectorAll('td.daycell:not(.weekend)').forEach(td=>{
     const emp = td.dataset.emp, day = parseInt(td.dataset.day, 10);
@@ -690,6 +714,7 @@ function setStatus(msg){
 }
 
 function handleCellClick(emp, day, e){
+  if(!canEdit()) return;
   openEditor(emp, day);
 }
 
@@ -710,6 +735,7 @@ function removeAssignment(emp, day, name){
 async function handleDrop(targetEmp, targetDay, td, e){
   e.preventDefault();
   td.classList.remove('drop-target');
+  if(!canEdit()) return;
   let data;
   try{ data = JSON.parse(e.dataTransfer.getData('text/plain')); }catch(err){ return; }
   if(!data || !data.name) return;
@@ -778,7 +804,8 @@ function escapeHtml(s){
 }
 
 function openEditor(emp, day){
-  editing = { emp, day, selection: ((monthData[emp] && monthData[emp][day]) || []).map(x=>({...x})) };
+  if(!canEdit()) return;
+  editing ={ emp, day, selection: ((monthData[emp] && monthData[emp][day]) || []).map(x=>({...x})) };
   const nd = daysInMonth(currentMonth);
   const veil = document.createElement('div');
   veil.className = 'veil';
@@ -913,6 +940,7 @@ function renderResults(q){
 }
 
 function openManageTeam(){
+  if(!canEdit()) return;
   const veil = document.createElement('div');
   veil.className = 'veil';
   veil.id = 'veilTeam';
@@ -1015,19 +1043,20 @@ function renderAccessList(){
   el.innerHTML = emails.map(e=>{
     const r = userRecord(e);
     const you = normEmail(currentUserEmail) === e;
+    const locked = isLockedRow(e);
     const tag = r.seed
-      ? '<span style="color:#8a919c;font-size:11px;"> — admin permanent</span>'
-      : (you ? '<span style="color:var(--navy);font-size:11px;font-weight:700;"> — vous</span>' : '');
+      ? `<span style="color:#8a919c;font-size:11px;"> — admin permanent${you?' (vous)':''}</span>`
+      : (you ? '<span style="color:#8a919c;font-size:11px;"> — vous</span>' : '');
     return `
-      <div style="padding:8px 10px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;">
+      <div style="padding:8px 10px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;${locked?'background:#fbfaf8;':''}">
         <span style="flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(e)}${tag}</span>
-        <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;cursor:${r.seed?'default':'pointer'};">
-          <input type="checkbox" data-active="${escapeHtml(e)}" ${r.active?'checked':''} ${r.seed?'disabled':''}> Actif
+        <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;cursor:${locked?'default':'pointer'};">
+          <input type="checkbox" data-active="${escapeHtml(e)}" ${r.active?'checked':''} ${locked?'disabled':''}> Actif
         </label>
-        <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;cursor:${r.seed?'default':'pointer'};">
-          <input type="checkbox" data-admin="${escapeHtml(e)}" ${r.admin?'checked':''} ${r.seed?'disabled':''}> Admin
+        <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;cursor:${locked?'default':'pointer'};">
+          <input type="checkbox" data-admin="${escapeHtml(e)}" ${r.admin?'checked':''} ${locked?'disabled':''}> Admin
         </label>
-        <button data-remove="${escapeHtml(e)}" ${r.seed?'disabled':''} style="border:none;background:none;color:${r.seed?'#c3c8d1':'#c0392b'};font-weight:700;cursor:${r.seed?'default':'pointer'};font-size:12px;">Retirer</button>
+        <button data-remove="${escapeHtml(e)}" ${locked?'disabled':''} style="border:none;background:none;color:${locked?'#c3c8d1':'#c0392b'};font-weight:700;cursor:${locked?'default':'pointer'};font-size:12px;">Retirer</button>
       </div>`;
   }).join('');
 
@@ -1041,7 +1070,7 @@ function renderAccessList(){
   el.querySelectorAll('[data-remove]').forEach(btn=>{
     btn.onclick = async ()=>{
       const name = btn.dataset.remove;
-      if(!confirm(`Retirer « ${name} » ? Ce compte perdra l'accès au planning et sera de nouveau à activer à sa prochaine connexion.`)) return;
+      if(!confirm(`Retirer « ${name} » ? Ce compte repassera en lecture seule et réapparaîtra ici à sa prochaine connexion.`)) return;
       await removeAccess(name);
     };
   });
@@ -1056,7 +1085,7 @@ function openAdminPanel(){
     <div class="editor" style="width:560px;">
       <header>
         <h2>Administration des accès</h2>
-        <p style="color:#d7ecef">Un compte n'accède au planning que s'il est coché « Actif ». Les nouveaux comptes arrivent désactivés.</p>
+        <p style="color:#d7ecef">« Actif » autorise la modification du planning, « Admin » autorise la gestion des droits. Sans « Actif », le compte est en lecture seule.</p>
       </header>
       <div class="body">
         <div style="display:flex;gap:6px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line);">
@@ -1065,7 +1094,8 @@ function openAdminPanel(){
         </div>
         <div class="results" id="accessResults" style="max-height:360px;"></div>
         <p style="margin:10px 0 0;font-size:11px;color:#8a919c;line-height:1.5;">
-          Les comptes apparaissent après leur première connexion Microsoft. Vous pouvez aussi en ajouter un à l'avance par son e-mail.
+          Les comptes apparaissent après leur première connexion Microsoft ; vous pouvez aussi en ajouter un à l'avance par son e-mail.
+          Votre propre ligne et celles des administrateurs permanents ne sont pas modifiables.
         </p>
       </div>
       <footer>
@@ -1085,7 +1115,7 @@ function openAdminPanel(){
     const ok = await persistAccess();
     input.value = '';
     renderAccessList();
-    toast(ok ? 'Utilisateur ajouté (désactivé)' : "Échec de l'enregistrement", !ok);
+    toast(ok ? 'Utilisateur ajouté (lecture seule)' : "Échec de l'enregistrement", !ok);
   };
   document.getElementById('btnAddAccess').onclick = addAccess;
   document.getElementById('newAccessEmail').addEventListener('keydown', (e)=>{ if(e.key === 'Enter') addAccess(); });
@@ -1094,32 +1124,8 @@ function openAdminPanel(){
   veil.addEventListener('click', (e)=>{ if(e.target.id === 'veilAdmin') veil.remove(); });
 }
 
-function showNoAccess(email){
-  const veil = document.createElement('div');
-  veil.className = 'veil';
-  veil.id = 'veilNoAccess';
-  veil.innerHTML = `
-    <div class="editor" style="width:380px;">
-      <header>
-        <h2>Accès en attente</h2>
-        <p style="color:#d7ecef">Votre compte n'est pas encore activé</p>
-      </header>
-      <div class="body" style="font-size:13px;line-height:1.6;">
-        <p style="margin:0 0 10px;">Connecté en tant que <b>${escapeHtml(email || '')}</b>.</p>
-        <p style="margin:0;">Un administrateur doit activer votre accès au planning. Rechargez la page une fois que c'est fait.</p>
-      </div>
-      <footer>
-        <button id="btnNoAccessLogout">Se déconnecter</button>
-      </footer>
-    </div>`;
-  document.body.appendChild(veil);
-  document.getElementById('btnNoAccessLogout').onclick = async ()=>{
-    if(sb) await sb.auth.signOut();
-    location.reload();
-  };
-}
-
 function openManageDossiers(){
+  if(!canEdit()) return;
   const veil = document.createElement('div');
   veil.className = 'veil';
   veil.id = 'veilManage';
@@ -1290,11 +1296,11 @@ async function applyRemoteChanges(){
     else if(key === 'dossiers-personnalises'){ await loadCustomDossiers(); }
     else if(key === 'dossiers-supprimes'){ await loadRemovedDossiers(); }
     else if(key === ACCESS_KEY){
-      const wasActive = hasAccess(currentUserEmail);
+      const couldEdit = canEdit();
       await loadAccess();
-      // accès révoqué en direct : on recharge pour retomber sur l'écran d'attente
-      if(sb && wasActive !== hasAccess(currentUserEmail)){ location.reload(); return; }
-      applyAdminVisibility();
+      applyPermissions();
+      // droit de modification gagné ou perdu en direct : la grille change d'état
+      if(couldEdit !== canEdit()) touched = true;
     }
   }
   if(touched) renderGrid();
@@ -1371,7 +1377,7 @@ async function startApp(){
     setOnline(false, 'Mode local');
     setStatus("Mode local (Supabase non configuré) : les données sont enregistrées dans ce navigateur uniquement — remplissez SUPABASE_URL et SUPABASE_ANON_KEY en tête du code pour activer le partage.");
     await loadAccess();
-    applyAdminVisibility();
+    applyPermissions();
     await startApp();
     return;
   }
@@ -1393,14 +1399,8 @@ async function startApp(){
     await loadAccess();
     await registerCurrentUser(currentUserEmail);
 
-    if(!hasAccess(currentUserEmail)){
-      setOnline(true, 'Accès en attente');
-      showNoAccess(currentUserEmail);
-      return;
-    }
-
     document.getElementById('btnLogout').style.display = '';
-    applyAdminVisibility();
+    applyPermissions();
     await startApp();
   };
 
