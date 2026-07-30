@@ -190,7 +190,7 @@
   <span id="missionLegend" style="display:flex;gap:12px;flex-wrap:wrap;"></span>
   <span><span class="dot" style="background:var(--card);border:1px solid var(--line)"></span>Disponible</span>
   <span><span class="dot" style="background:var(--grey)"></span>Week-end</span>
-  <span id="clipStatus" style="color:#8a919c;">Glissez une étiquette vers un autre jour de la même ligne pour répartir sur toute la plage · Ctrl+glissez pour copier sur ce seul jour · vers une autre personne pour déplacer (Ctrl+glisser pour copier)</span>
+  <span id="clipStatus" style="color:#8a919c;">Glissez une étiquette sur la même ligne pour répartir sur une plage de jours · sur la même colonne pour l'affecter à plusieurs personnes · Ctrl+glissez pour copier sur une seule case · Maj+glissez vers une autre personne pour déplacer</span>
   <span class="legend-actions">
   <span class="conn" id="connStatus"><span class="bead"></span><span class="conn-label">…</span></span>
   <span id="roBadge" style="display:none;background:#fdf0e8;color:var(--accent-ink);border:1px solid #f3d3c2;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;">Lecture seule</span>
@@ -741,7 +741,7 @@ function renderGrid(){
     td.addEventListener('dragover', (e)=>{
       e.preventDefault();
       td.classList.add('drop-target');
-      previewDrag(emp, day, e.ctrlKey || e.metaKey);
+      previewDrag(emp, day, e.ctrlKey || e.metaKey, e.shiftKey);
     });
     td.addEventListener('dragleave', ()=>{ td.classList.remove('drop-target'); setStatus(); });
     td.addEventListener('drop', (e)=> handleDrop(emp, day, td, e));
@@ -766,27 +766,41 @@ function renderGrid(){
 
 let dragSource = null; // {emp, day, name} — mémorisé au dragstart pour l'aperçu en direct
 
-function previewDrag(targetEmp, targetDay, ctrlHeld){
+// Les personnes affichées entre deux lignes, bornes comprises.
+function employeeRange(empA, empB){
+  const a = EMPLOYEES.indexOf(empA), b = EMPLOYEES.indexOf(empB);
+  if(a < 0 || b < 0) return null;
+  return EMPLOYEES.slice(Math.min(a, b), Math.max(a, b) + 1);
+}
+
+function previewDrag(targetEmp, targetDay, ctrlHeld, shiftHeld){
   if(!dragSource) return;
   if(dragSource.emp === targetEmp && dragSource.day === targetDay){ setStatus('Reposez ailleurs pour agir'); return; }
-  if(dragSource.emp === targetEmp){
-    if(ctrlHeld){
-      setStatus(`→ Copier « ${dragSource.name} » uniquement sur le jour ${targetDay} (Ctrl maintenu)`);
-    }else{
-      const lo = Math.min(dragSource.day, targetDay), hi = Math.max(dragSource.day, targetDay);
-      setStatus(`→ Répartir « ${dragSource.name} » du jour ${lo} au jour ${hi} (relâchez Ctrl pour ce mode)`);
-    }
-  }else{
-    setStatus(ctrlHeld
-      ? `→ Copier « ${dragSource.name} » chez ${targetEmp} (Ctrl maintenu)`
-      : `→ Déplacer « ${dragSource.name} » chez ${targetEmp} — maintenez Ctrl pour copier au lieu de déplacer`);
+
+  if(ctrlHeld){
+    setStatus(`→ Copier « ${dragSource.name} » sur cette seule case — ${targetEmp}, jour ${targetDay} (Ctrl maintenu)`);
+    return;
   }
+
+  if(dragSource.emp === targetEmp){
+    const lo = Math.min(dragSource.day, targetDay), hi = Math.max(dragSource.day, targetDay);
+    setStatus(`→ Répartir « ${dragSource.name} » du jour ${lo} au jour ${hi} (Ctrl+glisser pour cette seule case)`);
+    return;
+  }
+
+  const range = employeeRange(dragSource.emp, targetEmp);
+  if(dragSource.day === targetDay && !shiftHeld && range){
+    setStatus(`→ Répartir « ${dragSource.name} » sur ${range.length} personnes le jour ${targetDay} (Maj+glisser pour déplacer)`);
+    return;
+  }
+
+  setStatus(`→ Déplacer « ${dragSource.name} » chez ${targetEmp}, jour ${targetDay} (Ctrl+glisser pour copier)`);
 }
 
 function setStatus(msg){
   const el = document.getElementById('clipStatus');
   if(!el) return;
-  const text = msg || "Glissez une étiquette vers un autre jour de la même ligne pour répartir sur toute la plage · Ctrl+glissez pour copier sur ce seul jour · vers une autre personne pour déplacer (Ctrl+glisser pour copier)";
+  const text = msg || "Glissez une étiquette sur la même ligne pour répartir sur une plage de jours · sur la même colonne pour l'affecter à plusieurs personnes · Ctrl+glissez pour copier sur une seule case · Maj+glissez vers une autre personne pour déplacer";
   el.textContent = text;
   el.title = text; // le texte est tronqué à l'écran : on le garde lisible au survol
 }
@@ -819,6 +833,7 @@ async function handleDrop(targetEmp, targetDay, td, e){
   if(!data || !data.name) return;
   const srcEmp = data.emp, srcDay = parseInt(data.day, 10), name = data.name, type = data.type || DEFAULT_MISSION;
   const isCopy = e.ctrlKey || e.metaKey;
+  const forceMove = e.shiftKey;
 
   if(srcEmp === targetEmp && srcDay === targetDay) return;
 
@@ -830,8 +845,8 @@ async function handleDrop(targetEmp, targetDay, td, e){
       return;
     }
 
-    if(srcEmp === targetEmp && isCopy){
-      // même employé, mais Ctrl maintenu : copie ponctuelle sur ce seul jour, sans remplir les jours entre les deux
+    if(isCopy){
+      // Ctrl maintenu : copie ponctuelle sur cette seule case, sans rien remplir entre les deux
       addAssignment(targetEmp, targetDay, name, type);
       await saveMonth(currentMonth);
       renderGrid();
@@ -840,7 +855,7 @@ async function handleDrop(targetEmp, targetDay, td, e){
     }
 
     if(srcEmp === targetEmp){
-      // même employé, jour différent : on répartit sur toute la plage entre les deux jours
+      // même ligne : on répartit sur toute la plage de jours entre les deux cases
       const lo = Math.min(srcDay, targetDay), hi = Math.max(srcDay, targetDay);
       for(let d = lo; d <= hi; d++){
         const wd = new Date(YEAR, currentMonth, d).getDay();
@@ -853,16 +868,23 @@ async function handleDrop(targetEmp, targetDay, td, e){
       return;
     }
 
-    // employé différent : déplacement (ou copie) simple vers une seule case
-    addAssignment(targetEmp, targetDay, name, type);
-
-    if(!isCopy){
-      removeAssignment(srcEmp, srcDay, name);
+    const range = employeeRange(srcEmp, targetEmp);
+    if(srcDay === targetDay && !forceMove && range){
+      // même colonne : on répartit sur toutes les personnes entre les deux cases
+      range.forEach(emp=> addAssignment(emp, targetDay, name, type));
+      await saveMonth(currentMonth);
+      renderGrid();
+      toast(`Réparti sur ${range.length} personnes`);
+      return;
     }
+
+    // ailleurs : déplacement simple vers une seule case
+    addAssignment(targetEmp, targetDay, name, type);
+    removeAssignment(srcEmp, srcDay, name);
 
     await saveMonth(currentMonth);
     renderGrid();
-    toast(isCopy ? 'Copié' : 'Déplacé');
+    toast('Déplacé');
   }finally{
     mutating = false;
   }
