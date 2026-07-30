@@ -185,6 +185,7 @@
   <span><span class="dot" style="background:var(--grey)"></span>Week-end</span>
   <span id="clipStatus" style="color:#8a919c;">Glissez une étiquette vers un autre jour de la même ligne pour répartir sur toute la plage · Ctrl+glissez pour copier sur ce seul jour · vers une autre personne pour déplacer (Ctrl+glisser pour copier)</span>
   <span class="conn" id="connStatus" style="margin-left:auto;"><span class="bead"></span><span class="conn-label">…</span></span>
+  <button id="btnAdmin" style="display:none;border:1px solid var(--line);background:#fff;color:var(--navy);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;">Admin</button>
   <button id="btnManageTeam" style="border:1px solid var(--line);background:#fff;color:var(--navy);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;">Gérer l'équipe</button>
   <button id="btnManage" style="border:1px solid var(--line);background:#fff;color:var(--navy);padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;">Gérer les dossiers</button>
   <button id="btnLogout" style="display:none;border:1px solid var(--line);background:#fff;color:#c0392b;padding:5px 12px;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;">Déconnexion</button>
@@ -249,6 +250,102 @@ async function kvSet(key, value){
   if(error){ kvOpError = true; setOnline(false); return false; }
   setOnline(true);
   return true;
+}
+
+/* ============================================================
+   CONTRÔLE D'ACCÈS
+   Chaque compte Microsoft doit être activé par un administrateur
+   avant de pouvoir consulter le planning. Un compte qui se
+   connecte pour la première fois est enregistré désactivé.
+
+   Note : Entra ID ne transmet à l'application que l'identité du
+   compte connecté, pas la liste des membres du groupe BAC Tours.
+   Un utilisateur n'apparaît donc ci-dessous qu'après sa première
+   connexion, ou s'il a été ajouté manuellement par son e-mail.
+   ============================================================ */
+const ACCESS_KEY = 'acces-utilisateurs';
+
+// Administrateurs permanents : toujours actifs et admins, non modifiables
+// depuis l'interface (garde-fou contre un verrouillage complet de l'app).
+const SEED_ADMINS = [
+  'enzo.gosset@bacauditconseil.fr',
+  'ivan.billon@bacauditconseil.fr',
+  'amina.lemrhari@bacauditconseil.fr',
+  'elodie.besson@bacauditconseil.fr'
+];
+
+let accessList = {};          // { "email": { active: bool, admin: bool } }
+let currentUserEmail = null;
+
+function normEmail(e){ return (e || '').trim().toLowerCase(); }
+
+function isSeedAdmin(email){ return SEED_ADMINS.includes(normEmail(email)); }
+
+function userRecord(email){
+  const e = normEmail(email);
+  const rec = accessList[e] || {};
+  const seed = isSeedAdmin(e);
+  return { email: e, seed, active: seed ? true : !!rec.active, admin: seed ? true : !!rec.admin };
+}
+
+function hasAccess(email){ return userRecord(email).active; }
+
+// En mode local (Supabase non configuré) il n'y a pas d'authentification :
+// on laisse la main complète pour pouvoir tester l'interface.
+function currentIsAdmin(){ return !sb ? true : userRecord(currentUserEmail).admin; }
+
+async function loadAccess(){
+  const val = await kvGet(ACCESS_KEY);
+  let obj = {};
+  try{ obj = val ? JSON.parse(val) : {}; }catch(e){ obj = {}; }
+  accessList = {};
+  Object.keys(obj).forEach(k=>{
+    const rec = obj[k] || {};
+    accessList[normEmail(k)] = { active: !!rec.active, admin: !!rec.admin };
+  });
+  SEED_ADMINS.forEach(e=>{ accessList[e] = { active: true, admin: true }; });
+}
+
+async function persistAccess(){
+  return kvSet(ACCESS_KEY, JSON.stringify(accessList));
+}
+
+// Premier passage d'un compte : on l'inscrit désactivé pour qu'il
+// apparaisse dans la fenêtre d'administration.
+async function registerCurrentUser(email){
+  const e = normEmail(email);
+  if(!e || Object.prototype.hasOwnProperty.call(accessList, e)) return;
+  accessList[e] = { active: false, admin: false };
+  await persistAccess();
+}
+
+async function updateAccess(email, patch){
+  const e = normEmail(email);
+  if(isSeedAdmin(e)) return;
+  await loadAccess(); // on repart de l'état serveur pour ne pas écraser un autre admin
+  const rec = accessList[e] || { active: false, admin: false };
+  accessList[e] = {
+    active: patch.active !== undefined ? patch.active : rec.active,
+    admin:  patch.admin  !== undefined ? patch.admin  : rec.admin
+  };
+  const ok = await persistAccess();
+  renderAccessList();
+  toast(ok ? 'Accès mis à jour' : "Échec de l'enregistrement", !ok);
+}
+
+async function removeAccess(email){
+  const e = normEmail(email);
+  if(isSeedAdmin(e)) return;
+  await loadAccess();
+  delete accessList[e];
+  const ok = await persistAccess();
+  renderAccessList();
+  toast(ok ? 'Utilisateur retiré' : "Échec de l'enregistrement", !ok);
+}
+
+function applyAdminVisibility(){
+  const btn = document.getElementById('btnAdmin');
+  if(btn) btn.style.display = currentIsAdmin() ? '' : 'none';
 }
 
 let monthData = {}; // { "1": {"Amina": [{name,type}, ...]}, ... } for the currently loaded month
@@ -907,6 +1004,121 @@ function openManageTeam(){
   veil.addEventListener('click', (e)=>{ if(e.target.id === 'veilTeam') veil.remove(); });
 }
 
+function renderAccessList(){
+  const el = document.getElementById('accessResults');
+  if(!el) return;
+  const emails = Object.keys(accessList).sort((a,b)=> a.localeCompare(b));
+  if(!emails.length){
+    el.innerHTML = '<div class="disabled">Aucun utilisateur enregistré</div>';
+    return;
+  }
+  el.innerHTML = emails.map(e=>{
+    const r = userRecord(e);
+    const you = normEmail(currentUserEmail) === e;
+    const tag = r.seed
+      ? '<span style="color:#8a919c;font-size:11px;"> — admin permanent</span>'
+      : (you ? '<span style="color:var(--navy);font-size:11px;font-weight:700;"> — vous</span>' : '');
+    return `
+      <div style="padding:8px 10px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;">
+        <span style="flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(e)}${tag}</span>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;cursor:${r.seed?'default':'pointer'};">
+          <input type="checkbox" data-active="${escapeHtml(e)}" ${r.active?'checked':''} ${r.seed?'disabled':''}> Actif
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;cursor:${r.seed?'default':'pointer'};">
+          <input type="checkbox" data-admin="${escapeHtml(e)}" ${r.admin?'checked':''} ${r.seed?'disabled':''}> Admin
+        </label>
+        <button data-remove="${escapeHtml(e)}" ${r.seed?'disabled':''} style="border:none;background:none;color:${r.seed?'#c3c8d1':'#c0392b'};font-weight:700;cursor:${r.seed?'default':'pointer'};font-size:12px;">Retirer</button>
+      </div>`;
+  }).join('');
+
+  el.querySelectorAll('[data-active]').forEach(cb=>{
+    cb.onchange = ()=> updateAccess(cb.dataset.active, { active: cb.checked });
+  });
+  el.querySelectorAll('[data-admin]').forEach(cb=>{
+    // devenir admin implique d'être actif, sinon le compte ne pourrait pas ouvrir l'app
+    cb.onchange = ()=> updateAccess(cb.dataset.admin, cb.checked ? { admin: true, active: true } : { admin: false });
+  });
+  el.querySelectorAll('[data-remove]').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const name = btn.dataset.remove;
+      if(!confirm(`Retirer « ${name} » ? Ce compte perdra l'accès au planning et sera de nouveau à activer à sa prochaine connexion.`)) return;
+      await removeAccess(name);
+    };
+  });
+}
+
+function openAdminPanel(){
+  if(!currentIsAdmin()) return;
+  const veil = document.createElement('div');
+  veil.className = 'veil';
+  veil.id = 'veilAdmin';
+  veil.innerHTML = `
+    <div class="editor" style="width:560px;">
+      <header>
+        <h2>Administration des accès</h2>
+        <p style="color:#d7ecef">Un compte n'accède au planning que s'il est coché « Actif ». Les nouveaux comptes arrivent désactivés.</p>
+      </header>
+      <div class="body">
+        <div style="display:flex;gap:6px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line);">
+          <input type="email" id="newAccessEmail" placeholder="prenom.nom@bacauditconseil.fr" autocomplete="off" style="flex:1;padding:7px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px;">
+          <button id="btnAddAccess" style="border:1px solid var(--accent);background:var(--accent);color:#fff;border-radius:6px;padding:0 12px;font-size:12.5px;font-weight:600;cursor:pointer;">Ajouter</button>
+        </div>
+        <div class="results" id="accessResults" style="max-height:360px;"></div>
+        <p style="margin:10px 0 0;font-size:11px;color:#8a919c;line-height:1.5;">
+          Les comptes apparaissent après leur première connexion Microsoft. Vous pouvez aussi en ajouter un à l'avance par son e-mail.
+        </p>
+      </div>
+      <footer>
+        <button id="btnCloseAdmin">Fermer</button>
+      </footer>
+    </div>`;
+  document.body.appendChild(veil);
+
+  renderAccessList();
+
+  const addAccess = async ()=>{
+    const input = document.getElementById('newAccessEmail');
+    const e = normEmail(input.value);
+    if(!e || e.indexOf('@') === -1){ toast('Adresse e-mail invalide', true); return; }
+    await loadAccess();
+    if(!accessList[e]) accessList[e] = { active: false, admin: false };
+    const ok = await persistAccess();
+    input.value = '';
+    renderAccessList();
+    toast(ok ? 'Utilisateur ajouté (désactivé)' : "Échec de l'enregistrement", !ok);
+  };
+  document.getElementById('btnAddAccess').onclick = addAccess;
+  document.getElementById('newAccessEmail').addEventListener('keydown', (e)=>{ if(e.key === 'Enter') addAccess(); });
+
+  document.getElementById('btnCloseAdmin').onclick = ()=> veil.remove();
+  veil.addEventListener('click', (e)=>{ if(e.target.id === 'veilAdmin') veil.remove(); });
+}
+
+function showNoAccess(email){
+  const veil = document.createElement('div');
+  veil.className = 'veil';
+  veil.id = 'veilNoAccess';
+  veil.innerHTML = `
+    <div class="editor" style="width:380px;">
+      <header>
+        <h2>Accès en attente</h2>
+        <p style="color:#d7ecef">Votre compte n'est pas encore activé</p>
+      </header>
+      <div class="body" style="font-size:13px;line-height:1.6;">
+        <p style="margin:0 0 10px;">Connecté en tant que <b>${escapeHtml(email || '')}</b>.</p>
+        <p style="margin:0;">Un administrateur doit activer votre accès au planning. Rechargez la page une fois que c'est fait.</p>
+      </div>
+      <footer>
+        <button id="btnNoAccessLogout">Se déconnecter</button>
+      </footer>
+    </div>`;
+  document.body.appendChild(veil);
+  document.getElementById('btnNoAccessLogout').onclick = async ()=>{
+    if(sb) await sb.auth.signOut();
+    location.reload();
+  };
+}
+
 function openManageDossiers(){
   const veil = document.createElement('div');
   veil.className = 'veil';
@@ -1077,6 +1289,13 @@ async function applyRemoteChanges(){
     else if(key === 'employes-liste'){ await loadEmployees(); touched = true; }
     else if(key === 'dossiers-personnalises'){ await loadCustomDossiers(); }
     else if(key === 'dossiers-supprimes'){ await loadRemovedDossiers(); }
+    else if(key === ACCESS_KEY){
+      const wasActive = hasAccess(currentUserEmail);
+      await loadAccess();
+      // accès révoqué en direct : on recharge pour retomber sur l'écran d'attente
+      if(sb && wasActive !== hasAccess(currentUserEmail)){ location.reload(); return; }
+      applyAdminVisibility();
+    }
   }
   if(touched) renderGrid();
 }
@@ -1142,6 +1361,7 @@ async function startApp(){
   renderMonthTabs();
   document.getElementById('btnManage').onclick = openManageDossiers;
   document.getElementById('btnManageTeam').onclick = openManageTeam;
+  document.getElementById('btnAdmin').onclick = openAdminPanel;
   document.getElementById('btnLogout').onclick = async ()=>{
     if(sb) await sb.auth.signOut();
     location.reload();
@@ -1150,6 +1370,8 @@ async function startApp(){
   if(!sb){
     setOnline(false, 'Mode local');
     setStatus("Mode local (Supabase non configuré) : les données sont enregistrées dans ce navigateur uniquement — remplissez SUPABASE_URL et SUPABASE_ANON_KEY en tête du code pour activer le partage.");
+    await loadAccess();
+    applyAdminVisibility();
     await startApp();
     return;
   }
@@ -1158,23 +1380,38 @@ async function startApp(){
   // de façon asynchrone : on démarre l'app dès que la session est confirmée,
   // que ce soit ici ou via getSession() ci-dessous (garde appStarted).
   let appStarted = false;
-  const launch = async ()=>{
+  const launch = async (session)=>{
     if(appStarted) return;
     appStarted = true;
     const veil = document.getElementById('veilLogin');
     if(veil) veil.remove();
+
+    const u = (session && session.user) || {};
+    const meta = u.user_metadata || {};
+    currentUserEmail = normEmail(u.email || meta.email || meta.preferred_username);
+
+    await loadAccess();
+    await registerCurrentUser(currentUserEmail);
+
+    if(!hasAccess(currentUserEmail)){
+      setOnline(true, 'Accès en attente');
+      showNoAccess(currentUserEmail);
+      return;
+    }
+
     document.getElementById('btnLogout').style.display = '';
+    applyAdminVisibility();
     await startApp();
   };
 
   sb.auth.onAuthStateChange((event, session)=>{
     if(event === 'SIGNED_OUT'){ location.reload(); return; }
-    if(session) launch();
+    if(session) launch(session);
   });
 
   const { data: { session } } = await sb.auth.getSession();
   if(session){
-    await launch();
+    await launch(session);
   }else if(!appStarted){
     setOnline(false, 'Non connecté');
     showLogin();
