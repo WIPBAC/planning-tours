@@ -259,7 +259,9 @@ async function kvSet(key, value){
    CONTRÔLE D'ACCÈS
    Deux droits, cumulables, gérés depuis la fenêtre « Admin » :
      · Actif → peut modifier le planning
-     · Admin → peut rendre les autres actifs ou admins
+     · Admin → peut rendre les autres actifs
+   Seuls les quatre administrateurs permanents donnent ou retirent
+   le droit « Admin », et eux seuls touchent aux comptes qui l'ont.
    Tout compte connecté voit le planning ; sans le droit « Actif »
    il est en lecture seule. Un compte qui se connecte pour la
    première fois arrive donc en lecture seule.
@@ -310,6 +312,16 @@ function isLockedRow(email){
   return isSeedAdmin(e) || (!!currentUserEmail && e === normEmail(currentUserEmail));
 }
 
+// Le droit « Admin » ne se donne et ne se retire que par un admin permanent.
+function canGrantAdmin(){ return !sb ? true : isSeedAdmin(currentUserEmail); }
+
+// Un admin non permanent ne touche qu'aux comptes qui ne sont pas admins :
+// sinon il pourrait neutraliser un admin en le désactivant ou en le retirant.
+function canManageRow(email){
+  if(!sb) return true;
+  return isSeedAdmin(currentUserEmail) || !userRecord(email).admin;
+}
+
 async function loadAccess(){
   const val = await kvGet(ACCESS_KEY);
   let obj = {};
@@ -337,7 +349,8 @@ async function registerCurrentUser(email){
 
 async function updateAccess(email, patch){
   const e = normEmail(email);
-  if(!currentIsAdmin() || isLockedRow(e)) return;
+  if(!currentIsAdmin() || isLockedRow(e) || !canManageRow(e)) return;
+  if(patch.admin !== undefined && !canGrantAdmin()) return;
   await loadAccess(); // on repart de l'état serveur pour ne pas écraser un autre admin
   const rec = accessList[e] || { active: false, admin: false };
   accessList[e] = {
@@ -351,7 +364,7 @@ async function updateAccess(email, patch){
 
 async function removeAccess(email){
   const e = normEmail(email);
-  if(!currentIsAdmin() || isLockedRow(e)) return;
+  if(!currentIsAdmin() || isLockedRow(e) || !canManageRow(e)) return;
   await loadAccess();
   delete accessList[e];
   const ok = await persistAccess();
@@ -1043,7 +1056,8 @@ function renderAccessList(){
   el.innerHTML = emails.map(e=>{
     const r = userRecord(e);
     const you = normEmail(currentUserEmail) === e;
-    const locked = isLockedRow(e);
+    const locked = isLockedRow(e) || !canManageRow(e);
+    const adminLocked = locked || !canGrantAdmin();
     const tag = r.seed
       ? `<span style="color:#8a919c;font-size:11px;"> — admin permanent${you?' (vous)':''}</span>`
       : (you ? '<span style="color:#8a919c;font-size:11px;"> — vous</span>' : '');
@@ -1053,8 +1067,8 @@ function renderAccessList(){
         <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;cursor:${locked?'default':'pointer'};">
           <input type="checkbox" data-active="${escapeHtml(e)}" ${r.active?'checked':''} ${locked?'disabled':''}> Actif
         </label>
-        <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;cursor:${locked?'default':'pointer'};">
-          <input type="checkbox" data-admin="${escapeHtml(e)}" ${r.admin?'checked':''} ${locked?'disabled':''}> Admin
+        <label title="${adminLocked?'Seuls les administrateurs permanents gèrent ce droit':''}" style="display:flex;align-items:center;gap:4px;font-size:11.5px;cursor:${adminLocked?'default':'pointer'};">
+          <input type="checkbox" data-admin="${escapeHtml(e)}" ${r.admin?'checked':''} ${adminLocked?'disabled':''}> Admin
         </label>
         <button data-remove="${escapeHtml(e)}" ${locked?'disabled':''} style="border:none;background:none;color:${locked?'#c3c8d1':'#c0392b'};font-weight:700;cursor:${locked?'default':'pointer'};font-size:12px;">Retirer</button>
       </div>`;
@@ -1085,7 +1099,7 @@ function openAdminPanel(){
     <div class="editor" style="width:560px;">
       <header>
         <h2>Administration des accès</h2>
-        <p style="color:#d7ecef">« Actif » autorise la modification du planning, « Admin » autorise la gestion des droits. Sans « Actif », le compte est en lecture seule.</p>
+        <p style="color:#d7ecef">« Actif » autorise la modification du planning, « Admin » autorise la gestion des accès. Sans « Actif », le compte est en lecture seule.</p>
       </header>
       <div class="body">
         <div style="display:flex;gap:6px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--line);">
@@ -1096,6 +1110,7 @@ function openAdminPanel(){
         <p style="margin:10px 0 0;font-size:11px;color:#8a919c;line-height:1.5;">
           Les comptes apparaissent après leur première connexion Microsoft ; vous pouvez aussi en ajouter un à l'avance par son e-mail.
           Votre propre ligne et celles des administrateurs permanents ne sont pas modifiables.
+          Seuls les administrateurs permanents donnent ou retirent le droit « Admin ».
         </p>
       </div>
       <footer>
