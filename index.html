@@ -347,29 +347,84 @@ async function registerCurrentUser(email){
   await persistAccess();
 }
 
-async function updateAccess(email, patch){
+/* --- Brouillon de la fenêtre d'administration ---------------
+   Les cases cochées ne partent pas au serveur immédiatement :
+   elles s'accumulent dans un brouillon, appliqué au clic sur
+   « Enregistrer ». À l'enregistrement on repart de l'état
+   serveur et on ne réécrit que les lignes réellement touchées,
+   pour ne pas écraser le travail d'un autre administrateur.
+   ------------------------------------------------------------ */
+let accessDraft = null;     // état en cours d'édition
+let accessBaseline = null;  // état à l'ouverture, pour repérer les lignes touchées
+
+function cloneAccess(src){
+  const out = {};
+  Object.keys(src).forEach(k=>{ out[k] = { active: !!src[k].active, admin: !!src[k].admin }; });
+  return out;
+}
+
+function draftRecord(email){
   const e = normEmail(email);
-  if(!currentIsAdmin() || isLockedRow(e) || !canManageRow(e)) return;
+  const rec = (accessDraft || accessList)[e] || {};
+  const seed = isSeedAdmin(e);
+  return { email: e, seed, active: seed ? true : !!rec.active, admin: seed ? true : !!rec.admin };
+}
+
+function mayTouch(email){
+  const e = normEmail(email);
+  return currentIsAdmin() && !isLockedRow(e) && canManageRow(e);
+}
+
+function accessDirty(){
+  if(!accessDraft || !accessBaseline) return false;
+  const emails = new Set([...Object.keys(accessBaseline), ...Object.keys(accessDraft)]);
+  for(const e of emails){
+    if(JSON.stringify(accessBaseline[e] || null) !== JSON.stringify(accessDraft[e] || null)) return true;
+  }
+  return false;
+}
+
+function setDraft(email, patch){
+  const e = normEmail(email);
+  if(!mayTouch(e)) return;
   if(patch.admin !== undefined && !canGrantAdmin()) return;
-  await loadAccess(); // on repart de l'état serveur pour ne pas écraser un autre admin
-  const rec = accessList[e] || { active: false, admin: false };
-  accessList[e] = {
+  const rec = accessDraft[e] || { active: false, admin: false };
+  accessDraft[e] = {
     active: patch.active !== undefined ? patch.active : rec.active,
     admin:  patch.admin  !== undefined ? patch.admin  : rec.admin
   };
-  const ok = await persistAccess();
   renderAccessList();
-  toast(ok ? 'Accès mis à jour' : "Échec de l'enregistrement", !ok);
 }
 
-async function removeAccess(email){
+function removeDraft(email){
   const e = normEmail(email);
-  if(!currentIsAdmin() || isLockedRow(e) || !canManageRow(e)) return;
-  await loadAccess();
-  delete accessList[e];
-  const ok = await persistAccess();
+  if(!mayTouch(e)) return;
+  delete accessDraft[e];
   renderAccessList();
-  toast(ok ? 'Utilisateur retiré' : "Échec de l'enregistrement", !ok);
+}
+
+async function saveAccess(){
+  if(!currentIsAdmin() || !accessDraft) return false;
+  await loadAccess(); // état serveur frais : les lignes non touchées restent telles quelles
+  const emails = new Set([...Object.keys(accessBaseline), ...Object.keys(accessDraft)]);
+  emails.forEach(e=>{
+    const before = accessBaseline[e] || null;
+    const after = accessDraft[e] || null;
+    if(JSON.stringify(before) === JSON.stringify(after)) return; // ligne non touchée
+    if(!mayTouch(e)) return;
+    if(!after){ delete accessList[e]; return; }
+    // seul un changement effectif du droit « Admin » demande un admin permanent :
+    // une ligne encore absente vaut « ni actif ni admin »
+    const prev = before || { active: false, admin: false };
+    if(prev.admin !== after.admin && !canGrantAdmin()) return;
+    accessList[e] = { active: after.active, admin: after.admin };
+  });
+  const ok = await persistAccess();
+  if(ok){
+    accessBaseline = cloneAccess(accessList);
+    accessDraft = cloneAccess(accessList);
+  }
+  return ok;
 }
 
 function applyPermissions(){
@@ -1048,13 +1103,13 @@ function openManageTeam(){
 function renderAccessList(){
   const el = document.getElementById('accessResults');
   if(!el) return;
-  const emails = Object.keys(accessList).sort((a,b)=> a.localeCompare(b));
+  const emails = Object.keys(accessDraft || accessList).sort((a,b)=> a.localeCompare(b));
   if(!emails.length){
     el.innerHTML = '<div class="disabled">Aucun utilisateur enregistré</div>';
     return;
   }
   el.innerHTML = emails.map(e=>{
-    const r = userRecord(e);
+    const r = draftRecord(e);
     const you = normEmail(currentUserEmail) === e;
     const locked = isLockedRow(e) || !canManageRow(e);
     const adminLocked = locked || !canGrantAdmin();
@@ -1075,19 +1130,22 @@ function renderAccessList(){
   }).join('');
 
   el.querySelectorAll('[data-active]').forEach(cb=>{
-    cb.onchange = ()=> updateAccess(cb.dataset.active, { active: cb.checked });
+    cb.onchange = ()=> setDraft(cb.dataset.active, { active: cb.checked });
   });
   el.querySelectorAll('[data-admin]').forEach(cb=>{
     // devenir admin implique d'être actif, sinon le compte ne pourrait pas ouvrir l'app
-    cb.onchange = ()=> updateAccess(cb.dataset.admin, cb.checked ? { admin: true, active: true } : { admin: false });
+    cb.onchange = ()=> setDraft(cb.dataset.admin, cb.checked ? { admin: true, active: true } : { admin: false });
   });
   el.querySelectorAll('[data-remove]').forEach(btn=>{
-    btn.onclick = async ()=>{
+    btn.onclick = ()=>{
       const name = btn.dataset.remove;
       if(!confirm(`Retirer « ${name} » ? Ce compte repassera en lecture seule et réapparaîtra ici à sa prochaine connexion.`)) return;
-      await removeAccess(name);
+      removeDraft(name);
     };
   });
+
+  const hint = document.getElementById('accessDirty');
+  if(hint) hint.style.visibility = accessDirty() ? 'visible' : 'hidden';
 }
 
 function openAdminPanel(){
@@ -1114,29 +1172,53 @@ function openAdminPanel(){
         </p>
       </div>
       <footer>
-        <button id="btnCloseAdmin">Fermer</button>
+        <span id="accessDirty" style="visibility:hidden;margin-right:auto;font-size:11.5px;color:var(--accent-ink);font-weight:700;">Modifications non enregistrées</span>
+        <button id="btnCloseAdmin">Annuler</button>
+        <button class="primary" id="btnSaveAccess">Enregistrer</button>
       </footer>
     </div>`;
   document.body.appendChild(veil);
 
+  // on édite une copie : rien ne part au serveur avant « Enregistrer »
+  accessBaseline = cloneAccess(accessList);
+  accessDraft = cloneAccess(accessList);
   renderAccessList();
 
-  const addAccess = async ()=>{
+  const addAccess = ()=>{
     const input = document.getElementById('newAccessEmail');
     const e = normEmail(input.value);
     if(!e || e.indexOf('@') === -1){ toast('Adresse e-mail invalide', true); return; }
-    await loadAccess();
-    if(!accessList[e]) accessList[e] = { active: false, admin: false };
-    const ok = await persistAccess();
+    if(!currentIsAdmin()) return;
+    if(!accessDraft[e]) accessDraft[e] = { active: false, admin: false };
     input.value = '';
     renderAccessList();
-    toast(ok ? 'Utilisateur ajouté (lecture seule)' : "Échec de l'enregistrement", !ok);
   };
   document.getElementById('btnAddAccess').onclick = addAccess;
   document.getElementById('newAccessEmail').addEventListener('keydown', (e)=>{ if(e.key === 'Enter') addAccess(); });
 
-  document.getElementById('btnCloseAdmin').onclick = ()=> veil.remove();
-  veil.addEventListener('click', (e)=>{ if(e.target.id === 'veilAdmin') veil.remove(); });
+  const close = ()=>{
+    accessDraft = null;
+    accessBaseline = null;
+    veil.remove();
+  };
+  const closeIfConfirmed = ()=>{
+    if(accessDirty() && !confirm('Des modifications ne sont pas enregistrées. Les abandonner ?')) return;
+    close();
+  };
+
+  document.getElementById('btnSaveAccess').onclick = async ()=>{
+    const btn = document.getElementById('btnSaveAccess');
+    btn.disabled = true;
+    const ok = await saveAccess();
+    btn.disabled = false;
+    if(!ok){ toast("Échec de l'enregistrement — vérifiez la connexion", true); return; }
+    toast('Accès enregistrés');
+    applyPermissions();
+    renderGrid();
+    close();
+  };
+  document.getElementById('btnCloseAdmin').onclick = closeIfConfirmed;
+  veil.addEventListener('click', (e)=>{ if(e.target.id === 'veilAdmin') closeIfConfirmed(); });
 }
 
 function openManageDossiers(){
