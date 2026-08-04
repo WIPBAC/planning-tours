@@ -132,8 +132,11 @@
   .chip[draggable]{ cursor:grab; }
   .chip[draggable]:active{ cursor:grabbing; }
   .chip.dragging{ opacity:.35; }
-  /* discret repère : cette affectation porte un commentaire, visible au survol */
-  .chip.has-note{ text-decoration:underline dotted; text-underline-offset:2px; }
+  /* repère « * » : cette affectation porte un commentaire, visible au survol.
+     Le nom se tronque avant l'astérisque, qui reste donc toujours affiché. */
+  .chip.has-note{ display:flex; align-items:center; gap:3px; }
+  .chip.has-note .chip-name{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .chip.has-note .note-mark{ flex:0 0 auto; font-weight:700; }
   .empty-hint{ color:#c3c8d1; font-size:16px; text-align:center; padding-top:8px; }
 
   /* editor popover */
@@ -808,7 +811,7 @@ function renderGrid(){
           // infobulle volontairement courte : le nom, et le commentaire s'il y en a un.
           // Les gestes disponibles restent rappelés dans la barre de légende.
           const tip = note ? `${item.name}\n${note}` : item.name;
-          return `<span class="chip${note?' has-note':''}" ${editable?'draggable="true"':''} data-emp="${escapeHtml(emp)}" data-day="${d}" data-name="${escapeHtml(item.name)}" data-type="${item.type}" data-comment="${escapeHtml(note)}" style="background:${c.bg};color:${c.ink};" title="${escapeHtml(tip)}">${escapeHtml(item.name)}</span>`;
+          return `<span class="chip${note?' has-note':''}" ${editable?'draggable="true"':''} data-emp="${escapeHtml(emp)}" data-day="${d}" data-name="${escapeHtml(item.name)}" data-type="${item.type}" data-comment="${escapeHtml(note)}" style="background:${c.bg};color:${c.ink};" title="${escapeHtml(tip)}">${note?`<span class="chip-name">${escapeHtml(item.name)}</span><span class="note-mark">*</span>`:escapeHtml(item.name)}</span>`;
         }).join('') + '</div>';
       }else{
         content = editable ? '<div class="empty-hint">+</div>' : '';
