@@ -190,7 +190,7 @@
   <span id="missionLegend" style="display:flex;gap:12px;flex-wrap:wrap;"></span>
   <span><span class="dot" style="background:var(--card);border:1px solid var(--line)"></span>Disponible</span>
   <span><span class="dot" style="background:var(--grey)"></span>Week-end</span>
-  <span id="clipStatus" style="color:#8a919c;">Glissez une étiquette sur la même ligne pour répartir sur une plage de jours · sur la même colonne pour l'affecter à plusieurs personnes · Ctrl+glissez pour copier sur une seule case · Maj+glissez vers une autre personne pour déplacer · Clic droit sur une étiquette pour la supprimer</span>
+  <span id="clipStatus" style="color:#8a919c;">Glissez une étiquette sur la même ligne pour répartir sur une plage de jours · sur la même colonne pour l'affecter à plusieurs personnes · Ctrl+glissez pour copier sur une seule case · Maj+glissez vers une autre personne pour déplacer · Clic droit sur une étiquette pour la supprimer · Double-clic pour voir la planification du dossier</span>
   <span class="legend-actions">
   <span class="conn" id="connStatus"><span class="bead"></span><span class="conn-label">…</span></span>
   <span id="roBadge" style="display:none;background:#fdf0e8;color:var(--accent-ink);border:1px solid #f3d3c2;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;">Lecture seule</span>
@@ -250,6 +250,21 @@ async function kvGet(key){
   if(error){ kvOpError = true; setOnline(false); return null; }
   setOnline(true);
   return data ? data.value : null;
+}
+
+// Lecture groupée : une seule requête pour les 12 mois, plutôt que douze.
+async function kvGetMany(keys){
+  const out = {};
+  keys.forEach(k=>{ out[k] = null; });
+  if(!sb){
+    keys.forEach(k=>{ try{ out[k] = localStorage.getItem(LOCAL_PREFIX + k); }catch(e){} });
+    return out;
+  }
+  const { data, error } = await sb.from('planning_kv').select('key,value').in('key', keys);
+  if(error){ kvOpError = true; setOnline(false); return null; }
+  setOnline(true);
+  (data || []).forEach(row=>{ out[row.key] = row.value; });
+  return out;
 }
 
 async function kvSet(key, value){
@@ -720,7 +735,7 @@ function renderGrid(){
       }else if(list.length){
         content = '<div class="chips">' + list.map(item=>{
           const c = missionColor(item.type);
-          return `<span class="chip" ${editable?'draggable="true"':''} data-emp="${escapeHtml(emp)}" data-day="${d}" data-name="${escapeHtml(item.name)}" data-type="${item.type}" style="background:${c.bg};color:${c.ink};" title="${escapeHtml(item.name)} — ${c.label}${editable?' — glissez pour déplacer, clic droit pour supprimer':''}">${escapeHtml(item.name)}</span>`;
+          return `<span class="chip" ${editable?'draggable="true"':''} data-emp="${escapeHtml(emp)}" data-day="${d}" data-name="${escapeHtml(item.name)}" data-type="${item.type}" style="background:${c.bg};color:${c.ink};" title="${escapeHtml(item.name)} — ${c.label}${editable?' — glissez pour déplacer, clic droit pour supprimer,':' —'} double-clic pour voir la planification du dossier">${escapeHtml(item.name)}</span>`;
         }).join('') + '</div>';
       }else{
         content = editable ? '<div class="empty-hint">+</div>' : '';
@@ -733,7 +748,17 @@ function renderGrid(){
 
   table.innerHTML = thead + tbody;
 
-  if(!editable) return; // lecture seule : aucun clic ni glisser-déposer
+  // consultation d'un dossier : disponible même pour un compte en lecture seule
+  table.querySelectorAll('.chip[data-name]').forEach(chip=>{
+    chip.addEventListener('dblclick', (e)=>{
+      e.preventDefault();
+      e.stopPropagation();
+      clearTimeout(chipClickTimer);
+      openDossierPlanning(chip.dataset.name);
+    });
+  });
+
+  if(!editable) return; // lecture seule : aucune modification
 
   table.querySelectorAll('td.daycell:not(.weekend)').forEach(td=>{
     const emp = td.dataset.emp, day = parseInt(td.dataset.day, 10);
@@ -748,6 +773,13 @@ function renderGrid(){
   });
 
   table.querySelectorAll('.chip[draggable]').forEach(chip=>{
+    // clic simple : on laisse passer le délai du double-clic avant d'ouvrir l'éditeur
+    chip.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      clearTimeout(chipClickTimer);
+      const emp = chip.dataset.emp, day = parseInt(chip.dataset.day, 10);
+      chipClickTimer = setTimeout(()=> openEditor(emp, day), 220);
+    });
     chip.addEventListener('dragstart', (e)=>{
       e.dataTransfer.effectAllowed = 'move';
       const emp = chip.dataset.emp, day = chip.dataset.day, name = chip.dataset.name, type = chip.dataset.type;
@@ -788,7 +820,8 @@ async function deleteAssignment(emp, day, name){
   }
 }
 
-let dragSource = null; // {emp, day, name} — mémorisé au dragstart pour l'aperçu en direct
+let dragSource = null;      // {emp, day, name} — mémorisé au dragstart pour l'aperçu en direct
+let chipClickTimer = null;  // départage clic simple (édition) et double-clic (fiche dossier)
 
 // Les personnes affichées entre deux lignes, bornes comprises.
 function employeeRange(empA, empB){
@@ -824,7 +857,7 @@ function previewDrag(targetEmp, targetDay, ctrlHeld, shiftHeld){
 function setStatus(msg){
   const el = document.getElementById('clipStatus');
   if(!el) return;
-  const text = msg || "Glissez une étiquette sur la même ligne pour répartir sur une plage de jours · sur la même colonne pour l'affecter à plusieurs personnes · Ctrl+glissez pour copier sur une seule case · Maj+glissez vers une autre personne pour déplacer · Clic droit sur une étiquette pour la supprimer";
+  const text = msg || "Glissez une étiquette sur la même ligne pour répartir sur une plage de jours · sur la même colonne pour l'affecter à plusieurs personnes · Ctrl+glissez pour copier sur une seule case · Maj+glissez vers une autre personne pour déplacer · Clic droit sur une étiquette pour la supprimer · Double-clic pour voir la planification du dossier";
   el.textContent = text;
   el.title = text; // le texte est tronqué à l'écran : on le garde lisible au survol
 }
@@ -1061,6 +1094,173 @@ function renderResults(q){
       renderResults(document.getElementById('search').value);
     };
   });
+}
+
+/* ============================================================
+   FICHE D'UN DOSSIER
+   Double-clic sur une étiquette : qui travaille dessus, sur
+   quelles dates, sur toute l'année. Les périodes déjà passées
+   sont grisées. Consultable aussi en lecture seule.
+   ============================================================ */
+
+// Deux jours planifiés se suivent si rien ne les sépare, ou seulement un week-end.
+function onlyWeekendBetween(m1, d1, m2, d2){
+  const a = new Date(YEAR, m1, d1), b = new Date(YEAR, m2, d2);
+  const gap = Math.round((b - a) / 86400000);
+  if(gap <= 0) return false;
+  for(let i = 1; i < gap; i++){
+    const w = new Date(YEAR, m1, d1 + i).getDay();
+    if(w !== 0 && w !== 6) return false;
+  }
+  return true;
+}
+
+// Jours isolés → périodes continues de même type de mission.
+function mergeIntoRanges(items){
+  const sorted = items.slice().sort((a,b)=> a.m - b.m || a.d - b.d);
+  const out = [];
+  sorted.forEach(it=>{
+    const last = out[out.length - 1];
+    if(last && last.type === it.type && onlyWeekendBetween(last.endM, last.endD, it.m, it.d)){
+      last.endM = it.m; last.endD = it.d; last.days++;
+      return;
+    }
+    out.push({ startM: it.m, startD: it.d, endM: it.m, endD: it.d, type: it.type, days: 1 });
+  });
+  return out;
+}
+
+function formatRange(r){
+  const sm = MONTHS[r.startM].toLowerCase(), em = MONTHS[r.endM].toLowerCase();
+  if(r.startM === r.endM && r.startD === r.endD) return `${r.startD} ${sm}`;
+  if(r.startM === r.endM) return `${r.startD} au ${r.endD} ${sm}`;
+  return `${r.startD} ${sm} au ${r.endD} ${em}`;
+}
+
+function todayMidnight(){
+  const t = new Date();
+  t.setHours(0,0,0,0);
+  return t;
+}
+
+// { emp: [ {m,d,type} ] } pour un dossier, sur les 12 mois.
+function collectDossierOccurrences(monthValues, name){
+  const target = name.toLowerCase();
+  const byEmp = {};
+  for(let m = 0; m < 12; m++){
+    const val = monthValues[storageKey(m)];
+    if(!val) continue;
+    let data;
+    try{ data = normalizeMonthData(JSON.parse(val)); }catch(e){ continue; }
+    Object.keys(data).forEach(emp=>{
+      Object.keys(data[emp]).forEach(day=>{
+        (data[emp][day] || []).forEach(item=>{
+          if(item.name && item.name.toLowerCase() === target){
+            (byEmp[emp] = byEmp[emp] || []).push({ m, d: parseInt(day, 10), type: item.type || DEFAULT_MISSION });
+          }
+        });
+      });
+    });
+  }
+  return byEmp;
+}
+
+function renderDossierPlanning(name, byEmp){
+  const el = document.getElementById('dossierResults');
+  const sum = document.getElementById('dossierSummary');
+  if(!el || !sum) return;
+
+  // les employés de la grille d'abord, puis ceux qui n'y figurent plus
+  const known = EMPLOYEES.filter(e=> byEmp[e]);
+  const others = Object.keys(byEmp).filter(e=> !EMPLOYEES.includes(e)).sort((a,b)=> a.localeCompare(b));
+  const emps = [...known, ...others];
+
+  if(!emps.length){
+    sum.textContent = 'Aucune journée planifiée cette année';
+    el.innerHTML = '<div class="disabled">Ce dossier n\'est planifié nulle part en ' + YEAR + '</div>';
+    return;
+  }
+
+  const today = todayMidnight();
+  let totalDays = 0, upcoming = null;
+
+  const rows = emps.map(emp=>{
+    const ranges = mergeIntoRanges(byEmp[emp]);
+    const days = byEmp[emp].length;
+    totalDays += days;
+
+    const chips = ranges.map(r=>{
+      const start = new Date(YEAR, r.startM, r.startD);
+      const end = new Date(YEAR, r.endM, r.endD);
+      const past = end < today;
+      const ongoing = start <= today && today <= end;
+      if(!past && (!upcoming || start < upcoming)) upcoming = start;
+
+      const c = missionColor(r.type);
+      const style = past
+        ? 'background:#f1f0ee;color:#a2a8b0;border:1px solid #e6e3df;'
+        : `background:${c.bg};color:${c.ink};border:1px solid ${c.ink}33;`;
+      return `<span class="chip" style="${style}white-space:normal;font-weight:600;">
+        ${escapeHtml(formatRange(r))} · ${escapeHtml(c.label)}${r.days > 1 ? ` · ${r.days} j` : ''}${ongoing ? ' · en cours' : ''}
+      </span>`;
+    }).join('');
+
+    return `
+      <div style="padding:9px 10px;border-bottom:1px solid var(--line);">
+        <div style="font-size:12.5px;font-weight:700;color:var(--navy);margin-bottom:5px;">
+          ${escapeHtml(emp)} <span style="font-weight:400;color:#8a919c;">— ${days} jour${days > 1 ? 's' : ''}</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;">${chips}</div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = rows;
+  const next = upcoming
+    ? ` · prochaine date le ${upcoming.getDate()} ${MONTHS[upcoming.getMonth()].toLowerCase()}`
+    : ' · rien à venir';
+  sum.textContent = `${emps.length} personne${emps.length > 1 ? 's' : ''} · ${totalDays} jour${totalDays > 1 ? 's' : ''} planifié${totalDays > 1 ? 's' : ''} en ${YEAR}${next}`;
+}
+
+async function openDossierPlanning(name){
+  const veil = document.createElement('div');
+  veil.className = 'veil';
+  veil.id = 'veilDossier';
+  veil.innerHTML = `
+    <div class="editor" style="width:540px;">
+      <header>
+        <h2>${escapeHtml(name)}</h2>
+        <p style="color:#d7ecef" id="dossierSummary">Chargement…</p>
+      </header>
+      <div class="body">
+        <div class="results" id="dossierResults" style="max-height:420px;"><div class="disabled">Lecture du planning…</div></div>
+        <p style="margin:10px 0 0;font-size:11px;color:#8a919c;">Les périodes déjà passées sont grisées.</p>
+      </div>
+      <footer>
+        <button id="btnCloseDossier">Fermer</button>
+      </footer>
+    </div>`;
+  document.body.appendChild(veil);
+
+  const close = ()=>{
+    veil.remove();
+    document.removeEventListener('keydown', esc);
+  };
+  const esc = (e)=>{ if(e.key === 'Escape') close(); };
+  document.getElementById('btnCloseDossier').onclick = close;
+  veil.addEventListener('click', (e)=>{ if(e.target.id === 'veilDossier') close(); });
+  document.addEventListener('keydown', esc);
+
+  const keys = [];
+  for(let m = 0; m < 12; m++) keys.push(storageKey(m));
+  const values = await kvGetMany(keys);
+  if(!document.getElementById('veilDossier')) return; // fermé entre-temps
+
+  if(!values){
+    document.getElementById('dossierSummary').textContent = 'Lecture impossible';
+    document.getElementById('dossierResults').innerHTML = '<div class="disabled">Connexion perdue — réessayez</div>';
+    return;
+  }
+  renderDossierPlanning(name, collectDossierOccurrences(values, name));
 }
 
 function openManageTeam(){
