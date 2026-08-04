@@ -132,6 +132,8 @@
   .chip[draggable]{ cursor:grab; }
   .chip[draggable]:active{ cursor:grabbing; }
   .chip.dragging{ opacity:.35; }
+  /* discret repère : cette affectation porte un commentaire, visible au survol */
+  .chip.has-note{ text-decoration:underline dotted; text-underline-offset:2px; }
   .empty-hint{ color:#c3c8d1; font-size:16px; text-align:center; padding-top:8px; }
 
   /* editor popover */
@@ -140,7 +142,7 @@
     display:flex; align-items:center; justify-content:center;
   }
   .editor{
-    background:#fff; border-radius:10px; width:380px; max-width:92vw; max-height:80vh;
+    background:#fff; border-radius:10px; width:430px; max-width:92vw; max-height:80vh;
     display:flex; flex-direction:column; box-shadow:0 20px 50px rgba(0,0,0,.25);
   }
   .editor header{
@@ -149,11 +151,21 @@
   .editor header h2{ margin:0; font-size:14px; }
   .editor header p{ margin:2px 0 0; font-size:11.5px; }
   .editor .body{ padding:12px 16px; overflow:auto; }
-  .editor .chosen{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:10px; min-height:20px; }
-  .editor .chosen .chip{ display:flex; align-items:center; gap:5px; cursor:default; }
-  .editor .chosen .chip button{
-    border:none; background:none; color:var(--amber-ink); font-weight:700; cursor:pointer;
-    font-size:12px; line-height:1; padding:0;
+  .editor .chosen{ display:flex; flex-direction:column; gap:7px; margin-bottom:10px; min-height:20px; }
+  .editor .chosen-row{ border:1px solid var(--line); border-radius:7px; padding:6px 7px; background:var(--paper); }
+  .editor .chosen-head{ display:flex; align-items:center; gap:6px; }
+  .editor .chosen-head .chip{ cursor:default; }
+  .editor .chosen-head select{
+    border:1px solid var(--line); background:#fff; border-radius:5px; font:inherit;
+    font-size:11px; font-weight:600; padding:3px 4px; cursor:pointer; max-width:130px;
+  }
+  .editor .chosen-head button{
+    border:none; background:none; color:#c0392b; font-weight:700; cursor:pointer;
+    font-size:13px; line-height:1; padding:0 2px;
+  }
+  .editor .chosen-row input[type=text]{
+    width:100%; margin-top:5px; padding:5px 7px; border:1px solid var(--line);
+    border-radius:5px; font-size:12px; background:#fff;
   }
   .editor input[type=text], .editor input[type=email], .editor input[type=password]{
     width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px;
@@ -535,9 +547,14 @@ function renderMissionLegend(){
 function normalizeMonthData(data){
   Object.keys(data).forEach(emp=>{
     Object.keys(data[emp]).forEach(day=>{
-      data[emp][day] = (data[emp][day] || []).map(item=>
-        (typeof item === 'string') ? { name: item, type: DEFAULT_MISSION } : item
-      );
+      data[emp][day] = (data[emp][day] || []).map(item=>{
+        if(typeof item === 'string') return { name: item, type: DEFAULT_MISSION };
+        const out = { name: item.name, type: item.type || DEFAULT_MISSION };
+        // le commentaire est facultatif : on ne stocke rien s'il est vide
+        const comment = (item.comment || '').trim();
+        if(comment) out.comment = comment;
+        return out;
+      });
     });
   });
   return data;
@@ -778,7 +795,12 @@ function renderGrid(){
       }else if(list.length){
         content = '<div class="chips">' + list.map(item=>{
           const c = missionColor(item.type);
-          return `<span class="chip" ${editable?'draggable="true"':''} data-emp="${escapeHtml(emp)}" data-day="${d}" data-name="${escapeHtml(item.name)}" data-type="${item.type}" style="background:${c.bg};color:${c.ink};" title="${escapeHtml(item.name)} — ${c.label}${editable?' — glissez pour déplacer, clic droit pour supprimer,':' —'} double-clic pour voir la planification du dossier">${escapeHtml(item.name)}</span>`;
+          const note = (item.comment || '').trim();
+          const gestes = editable
+            ? 'Glissez pour déplacer · clic droit pour supprimer · double-clic pour la planification du dossier'
+            : 'Double-clic pour la planification du dossier';
+          const tip = `${item.name} — ${c.label}` + (note ? `\nCommentaire : ${note}` : '') + `\n\n${gestes}`;
+          return `<span class="chip${note?' has-note':''}" ${editable?'draggable="true"':''} data-emp="${escapeHtml(emp)}" data-day="${d}" data-name="${escapeHtml(item.name)}" data-type="${item.type}" data-comment="${escapeHtml(note)}" style="background:${c.bg};color:${c.ink};" title="${escapeHtml(tip)}">${escapeHtml(item.name)}</span>`;
         }).join('') + '</div>';
       }else{
         content = editable ? '<div class="empty-hint">+</div>' : '';
@@ -826,8 +848,9 @@ function renderGrid(){
     chip.addEventListener('dragstart', (e)=>{
       e.dataTransfer.effectAllowed = 'move';
       const emp = chip.dataset.emp, day = chip.dataset.day, name = chip.dataset.name, type = chip.dataset.type;
-      e.dataTransfer.setData('text/plain', JSON.stringify({ emp, day, name, type }));
-      dragSource = { emp, day: parseInt(day, 10), name, type };
+      const comment = chip.dataset.comment || '';
+      e.dataTransfer.setData('text/plain', JSON.stringify({ emp, day, name, type, comment }));
+      dragSource = { emp, day: parseInt(day, 10), name, type, comment };
       chip.classList.add('dragging');
     });
     chip.addEventListener('dragend', ()=>{
@@ -910,10 +933,15 @@ function handleCellClick(emp, day, e){
   openEditor(emp, day);
 }
 
-function addAssignment(emp, day, name, type){
+function addAssignment(emp, day, name, type, comment){
   if(!monthData[emp]) monthData[emp] = {};
   const current = monthData[emp][day] || [];
-  if(!current.some(x=> x.name.toLowerCase() === name.toLowerCase())) current.push({ name, type: type || DEFAULT_MISSION });
+  if(!current.some(x=> x.name.toLowerCase() === name.toLowerCase())){
+    const item = { name, type: type || DEFAULT_MISSION };
+    const note = (comment || '').trim();
+    if(note) item.comment = note;
+    current.push(item);
+  }
   monthData[emp][day] = current;
 }
 
@@ -932,6 +960,7 @@ async function handleDrop(targetEmp, targetDay, td, e){
   try{ data = JSON.parse(e.dataTransfer.getData('text/plain')); }catch(err){ return; }
   if(!data || !data.name) return;
   const srcEmp = data.emp, srcDay = parseInt(data.day, 10), name = data.name, type = data.type || DEFAULT_MISSION;
+  const comment = data.comment || '';
   const isCopy = e.ctrlKey || e.metaKey;
   const forceMove = e.shiftKey;
 
@@ -947,7 +976,7 @@ async function handleDrop(targetEmp, targetDay, td, e){
 
     if(isCopy){
       // Ctrl maintenu : copie ponctuelle sur cette seule case, sans rien remplir entre les deux
-      addAssignment(targetEmp, targetDay, name, type);
+      addAssignment(targetEmp, targetDay, name, type, comment);
       await saveMonth(currentMonth);
       renderGrid();
       toast('Copié');
@@ -960,7 +989,7 @@ async function handleDrop(targetEmp, targetDay, td, e){
       for(let d = lo; d <= hi; d++){
         const wd = new Date(YEAR, currentMonth, d).getDay();
         if(wd === 0 || wd === 6) continue;
-        addAssignment(targetEmp, d, name, type);
+        addAssignment(targetEmp, d, name, type, comment);
       }
       await saveMonth(currentMonth);
       renderGrid();
@@ -971,7 +1000,7 @@ async function handleDrop(targetEmp, targetDay, td, e){
     const range = employeeRange(srcEmp, targetEmp);
     if(srcDay === targetDay && !forceMove && range){
       // même colonne : on répartit sur toutes les personnes entre les deux cases
-      range.forEach(emp=> addAssignment(emp, targetDay, name, type));
+      range.forEach(emp=> addAssignment(emp, targetDay, name, type, comment));
       await saveMonth(currentMonth);
       renderGrid();
       toast(`Réparti sur ${range.length} personnes`);
@@ -979,7 +1008,7 @@ async function handleDrop(targetEmp, targetDay, td, e){
     }
 
     // ailleurs : déplacement simple vers une seule case
-    addAssignment(targetEmp, targetDay, name, type);
+    addAssignment(targetEmp, targetDay, name, type, comment);
     removeAssignment(srcEmp, srcDay, name);
 
     await saveMonth(currentMonth);
@@ -1069,13 +1098,17 @@ function renderChosen(){
   }
   el.innerHTML = editing.selection.map((s,i)=>{
     const c = missionColor(s.type);
-    return `<span class="chip" style="display:inline-flex;align-items:center;gap:5px;background:${c.bg};color:${c.ink};">
-      ${escapeHtml(s.name)}
-      <select data-typeselect="${i}" style="border:none;background:transparent;color:inherit;font:inherit;font-size:9px;font-weight:700;cursor:pointer;">${missionOptionsHtml(s.type)}</select>
-      <button data-i="${i}">✕</button>
-    </span>`;
+    return `<div class="chosen-row">
+      <div class="chosen-head">
+        <span class="chip" style="flex:1;min-width:0;background:${c.bg};color:${c.ink};">${escapeHtml(s.name)}</span>
+        <select data-typeselect="${i}">${missionOptionsHtml(s.type)}</select>
+        <button data-i="${i}" title="Retirer ce dossier">✕</button>
+      </div>
+      <input type="text" data-note="${i}" maxlength="200" placeholder="Commentaire (facultatif)" value="${escapeHtml(s.comment || '')}">
+    </div>`;
   }).join('');
-  el.querySelectorAll('button').forEach(btn=>{
+
+  el.querySelectorAll('[data-i]').forEach(btn=>{
     btn.onclick = ()=>{
       editing.selection.splice(parseInt(btn.dataset.i,10),1);
       renderChosen();
@@ -1087,6 +1120,10 @@ function renderChosen(){
       editing.selection[parseInt(sel.dataset.typeselect,10)].type = sel.value;
       renderChosen();
     };
+  });
+  // saisie libre : on enregistre au fil de la frappe sans redessiner, pour ne pas perdre le curseur
+  el.querySelectorAll('[data-note]').forEach(input=>{
+    input.oninput = ()=>{ editing.selection[parseInt(input.dataset.note,10)].comment = input.value; };
   });
 }
 
@@ -1164,11 +1201,11 @@ function mergeIntoRanges(items){
   const out = [];
   sorted.forEach(it=>{
     const last = out[out.length - 1];
-    if(last && last.type === it.type && onlyWeekendBetween(last.endM, last.endD, it.m, it.d)){
+    if(last && last.type === it.type && last.comment === it.comment && onlyWeekendBetween(last.endM, last.endD, it.m, it.d)){
       last.endM = it.m; last.endD = it.d; last.days++;
       return;
     }
-    out.push({ startM: it.m, startD: it.d, endM: it.m, endD: it.d, type: it.type, days: 1 });
+    out.push({ startM: it.m, startD: it.d, endM: it.m, endD: it.d, type: it.type, comment: it.comment, days: 1 });
   });
   return out;
 }
@@ -1199,7 +1236,7 @@ function collectDossierOccurrences(monthValues, name){
       Object.keys(data[emp]).forEach(day=>{
         (data[emp][day] || []).forEach(item=>{
           if(item.name && item.name.toLowerCase() === target){
-            (byEmp[emp] = byEmp[emp] || []).push({ m, d: parseInt(day, 10), type: item.type || DEFAULT_MISSION });
+            (byEmp[emp] = byEmp[emp] || []).push({ m, d: parseInt(day, 10), type: item.type || DEFAULT_MISSION, comment: (item.comment || '').trim() });
           }
         });
       });
@@ -1244,7 +1281,7 @@ function renderDossierPlanning(name, byEmp){
         ? 'background:#f1f0ee;color:#a2a8b0;border:1px solid #e6e3df;'
         : `background:${c.bg};color:${c.ink};border:1px solid ${c.ink}33;`;
       return `<span class="chip" style="${style}white-space:normal;font-weight:600;">
-        ${escapeHtml(formatRange(r))} · ${escapeHtml(c.label)}${r.days > 1 ? ` · ${r.days} j` : ''}${ongoing ? ' · en cours' : ''}
+        ${escapeHtml(formatRange(r))} · ${escapeHtml(c.label)}${r.days > 1 ? ` · ${r.days} j` : ''}${ongoing ? ' · en cours' : ''}${r.comment ? ` · ${escapeHtml(r.comment)}` : ''}
       </span>`;
     }).join('');
 
@@ -1623,7 +1660,14 @@ function closeEditor(){
 
 async function commitEditor(){
   if(!editing) return;
-  const { emp, day, selection } = editing;
+  const { emp, day } = editing;
+  // commentaire facultatif : on ne conserve que ceux réellement remplis
+  const selection = editing.selection.map(s=>{
+    const item = { name: s.name, type: s.type || DEFAULT_MISSION };
+    const note = (s.comment || '').trim();
+    if(note) item.comment = note;
+    return item;
+  });
   const extendToggle = document.getElementById('extendToggle');
   const doExtend = extendToggle && extendToggle.checked;
   const extendEnd = doExtend ? parseInt(document.getElementById('extendEnd').value, 10) : day;
