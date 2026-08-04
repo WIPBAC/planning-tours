@@ -100,8 +100,8 @@
     padding:6px 4px; font-size:10.5px; color:#5b6472; font-weight:600;
     text-align:center; min-width:78px;
   }
-  thead th.weekend{ background:var(--grey); color:#2b3138; }
-  thead th.weekend .dow{ color:#4a515c; }
+  thead th.weekend, thead th.holiday{ background:var(--grey); color:#2b3138; }
+  thead th.weekend .dow, thead th.holiday .dow{ color:#4a515c; }
   thead th .dow{ display:block; text-transform:uppercase; font-size:9px; color:#9aa2ad; }
   thead th.namecol{
     position:sticky; left:0; top:0; z-index:15; background:var(--navy); color:#fff;
@@ -117,6 +117,8 @@
     padding:4px; vertical-align:top; cursor:pointer; min-height:52px; height:52px;
   }
   td.daycell.weekend{ background:var(--grey); cursor:default; }
+  /* Un jour férié prend la couleur du week-end mais reste modifiable. */
+  td.daycell.holiday{ background:var(--grey); }
   td.daycell.readonly{ cursor:default; }
   td.daycell.readonly:hover{ outline:none; }
   td.daycell:hover{ outline:2px solid var(--focus); outline-offset:-2px; }
@@ -189,7 +191,7 @@
 <div class="legend">
   <span id="missionLegend" style="display:flex;gap:12px;flex-wrap:wrap;"></span>
   <span><span class="dot" style="background:var(--card);border:1px solid var(--line)"></span>Disponible</span>
-  <span><span class="dot" style="background:var(--grey)"></span>Week-end</span>
+  <span><span class="dot" style="background:var(--grey)"></span>Week-end / jour férié</span>
   <span id="clipStatus" style="color:#8a919c;">Glissez une étiquette sur la même ligne pour répartir sur une plage de jours · sur la même colonne pour l'affecter à plusieurs personnes · Ctrl+glissez pour copier sur une seule case · Maj+glissez vers une autre personne pour déplacer · Clic droit sur une étiquette pour la supprimer · Double-clic pour voir la planification du dossier</span>
   <span class="legend-actions">
   <span class="conn" id="connStatus"><span class="bead"></span><span class="conn-label">…</span></span>
@@ -226,6 +228,45 @@ let EMPLOYEES = ["Amina","Enzo","Ivan","Elodie","Corinne","Candida","Jennifer","
 const MONTHS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 const DOW = ["dim","lun","mar","mer","jeu","ven","sam"];
 const DOSSIERS = ["3T Développement", "A.O.C. Kinés", "Actistream", "Ads Courses", "Aerofly Studio", "AGENCE 07", "Agence RIC", "AHM Filets", "AIVY SPORT-", "Alex'cie", "ALFI HOLDING", "Alpinado (calas)", "Alter Allis", "Amboise fromage-", "AMJ", "Aménagement Maçonnerie Paysagère", "Andrieu Micro", "Arawak Production", "Arjean", "Auchères Guillaume", "Augier", "augier family", "Axel Enzo (prd, clement)", "Azay Fromage (la riche)-", "Ballan Fromage", "BC Conseils", "Beaumont Adeline", "Benoit compétition valorisation", "Berett (og telecom)", "Besse (hoger)", "bl2", "BORD CLEMENCE", "Bost automobiles", "C2L2", "Cacel (les associés)", "Castling Avocat aarpi", "Castling Avocat selarl", "CF 37", "Chemoul Gilles", "CK (prd, clement)", "CLAXEL SCI", "Clément Benoît", "Coach'n Look", "Coralie chevalier - 2025", "Cotteray Karl", "Cron Charlène", "Cycles Labbe", "David Silva-", "Del Nevo Fabrice", "Deslis Marie", "Dumont Pauline", "Durand-Poupry", "Duveau Raphael", "E.L Consulting", "ECL SCI", "EGCB Ménoret -", "Ermitage foramtion médicale", "EVOKEYS", "Exaegis Corporate Development  Sas", "Exaegis Sas", "Exaehold  Sas", "FD - Consultants", "Ferras", "Fondettes Fromage 2-", "Fournié", "France Plaquiste 37", "Fresh Express 37", "Garage Calas", "Gaubert Clément", "gmjg", "Godet Grégory", "Godet Grégory LMNP", "Guinault Claire", "Haguenier Pauline 2025", "Heraudeau Julien", "HICA", "Holding Malone", "Imageimages", "imc Centre", "IMMOVIGNAUD", "Indivision Lazare-Barthet", "Jb Conseils", "Joue Fromage -", "Kermarec Gilbert", "Kermarec Gilbert lmnp", "KNS", "Komodo Développement-", "Komodo invest", "L'ATELIER DE LORELINE", "L.P.L.A-", "La maison d'Hugo-2025", "La Papoterie scm  (Godet/Clement)", "Lambert-Pinon Nathalie", "Le Medoc (eurl simon)", "Le resto d'azay- 2025", "LEBRAULT MARION", "lepine", "Les Frisés -", "Les menuiseries d'hugo-2025", "LES TOITURES LAMBERT", "Lhospitalier Candice (BFL Avocat) 2025", "Lhospitalier francois 2025", "Lina Al Wakil", "Linnebank Eléonore", "LMN Menuiserie", "Luca (calas)", "Luynes Fromage", "MADO (Médiatours)", "Magnolia", "Malone (og télécom)", "Markess International  Sas", "MCA HOLDING", "Med Chambray (Anim-axe)", "Med Chasseneuil (mercereau)", "Med Saumur", "Mediatours (cadeauxcom.com)", "Menuiserie Morisse", "mioa", "Montlouis Fromage (Veigné)", "Ménoret", "Ménoret Automobiles", "N.I.A. HOLDING", "Neo Consulting For You (NC4U)", "Novéa", "NS2B (brouard)", "OG Telecom", "Paillon Richard eirl-", "Paillon-verget SPEC-", "Peyron Alexandra", "Pinceau (og telecom)", "Pinnacle Partenaire Conseil - 2026", "Pournin Isabelle", "Prat Emmanuelle", "PRETOT Marie", "PVI-", "Qualis Holding", "R2 Sport", "R2immo", "R2marketing", "Renov innov", "Renov innov 18", "Robineau Olivier", "Ronsard auto", "Ronsard invest -", "Ropa (animaxe)", "Récits de France - 2026", "Saint Avertin Fromage", "Samson Laure -", "Sci de la Chataigneraie (godet)", "Sci Famille A.A.D.A.S", "Sci Maela -", "Sci Marval (boutet)", "Sci Menilea", "sci Solma (ASI)", "SDEM", "Selarl BFL Avocat 2025", "SNS (ads courses)", "So Beauty", "Sogeme - 2025", "Sud touraine automobile-", "Themma", "TMB -", "TMCZ", "TMG IMMO", "TMG Média", "Tourettes Médicales", "Tours fromage", "Travaux publics Eric Corbeau", "Urban Sapes", "USEP 37", "Val de loir 3D", "VALTHUR HOLDING", "Verget Elodie eirl -"];
+
+/* ============================================================
+   JOURS FÉRIÉS (France métropolitaine)
+   Les fêtes mobiles se calant sur Pâques, on la calcule plutôt
+   que de figer des dates : le tableau reste juste si YEAR change.
+   ============================================================ */
+function easterSunday(year){
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100;
+  const d = Math.floor(b / 4), e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const n = h + l - 7 * m + 114;
+  return new Date(year, Math.floor(n / 31) - 1, (n % 31) + 1);
+}
+
+const HOLIDAYS = (()=>{
+  const map = new Map();
+  const add = (month, day, label)=> map.set(`${month}-${day}`, label);
+  add(0, 1,  "Jour de l'An");
+  add(4, 1,  'Fête du Travail');
+  add(4, 8,  'Victoire 1945');
+  add(6, 14, 'Fête nationale');
+  add(7, 15, 'Assomption');
+  add(10, 1, 'Toussaint');
+  add(10, 11,'Armistice 1918');
+  add(11, 25,'Noël');
+  const easter = easterSunday(YEAR);
+  [[1, 'Lundi de Pâques'], [39, 'Ascension'], [50, 'Lundi de Pentecôte']].forEach(([offset, label])=>{
+    const x = new Date(YEAR, easter.getMonth(), easter.getDate() + offset);
+    add(x.getMonth(), x.getDate(), label);
+  });
+  return map;
+})();
+
+function holidayName(month, day){ return HOLIDAYS.get(`${month}-${day}`) || null; }
 
 let currentMonth = new Date().getFullYear() === YEAR ? new Date().getMonth() : 0;
 
@@ -718,7 +759,8 @@ function renderGrid(){
   for(let d=1; d<=nd; d++){
     const wd = new Date(YEAR, currentMonth, d).getDay();
     const weekend = (wd===0 || wd===6);
-    thead += `<th class="${weekend?'weekend':''}"><span class="dow">${DOW[wd]}</span>${d}</th>`;
+    const holiday = !weekend && holidayName(currentMonth, d);
+    thead += `<th class="${weekend?'weekend':(holiday?'holiday':'')}"${holiday?` title="Jour férié — ${escapeHtml(holiday)}"`:''}><span class="dow">${DOW[wd]}</span>${d}</th>`;
   }
   thead += '</tr></thead>';
 
@@ -728,6 +770,7 @@ function renderGrid(){
     for(let d=1; d<=nd; d++){
       const wd = new Date(YEAR, currentMonth, d).getDay();
       const weekend = (wd===0 || wd===6);
+      const holiday = !weekend && holidayName(currentMonth, d);
       const list = (monthData[emp] && monthData[emp][d]) ? monthData[emp][d] : [];
       let content;
       if(weekend){
@@ -740,7 +783,7 @@ function renderGrid(){
       }else{
         content = editable ? '<div class="empty-hint">+</div>' : '';
       }
-      tbody += `<td class="daycell ${weekend?'weekend':''} ${editable?'':'readonly'}" data-emp="${escapeHtml(emp)}" data-day="${d}">${content}</td>`;
+      tbody += `<td class="daycell ${weekend?'weekend':''} ${holiday?'holiday':''} ${editable?'':'readonly'}"${holiday?` title="Jour férié — ${escapeHtml(holiday)}"`:''} data-emp="${escapeHtml(emp)}" data-day="${d}">${content}</td>`;
     }
     tbody += '</tr>';
   });
