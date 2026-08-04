@@ -163,10 +163,19 @@
     border:none; background:none; color:#c0392b; font-weight:700; cursor:pointer;
     font-size:13px; line-height:1; padding:0 2px;
   }
-  .editor .chosen-row input[type=text]{
-    width:100%; margin-top:5px; padding:5px 7px; border:1px solid var(--line);
+  .editor .chosen-note{ position:relative; margin-top:5px; }
+  .editor .chosen-note input[type=text]{
+    width:100%; padding:5px 26px 5px 7px; border:1px solid var(--line);
     border-radius:5px; font-size:12px; background:#fff;
   }
+  /* croix d'effacement du commentaire : dans le champ, discrète, et
+     seulement quand il y a quelque chose à effacer */
+  .editor .chosen-note button{
+    position:absolute; right:3px; top:50%; transform:translateY(-50%);
+    border:none; background:none; color:#a2a8b0; cursor:pointer;
+    font-size:12px; line-height:1; padding:3px 5px;
+  }
+  .editor .chosen-note button:hover{ color:#c0392b; }
   .editor input[type=text], .editor input[type=email], .editor input[type=password]{
     width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px;
   }
@@ -1104,7 +1113,10 @@ function renderChosen(){
         <select data-typeselect="${i}">${missionOptionsHtml(s.type)}</select>
         <button data-i="${i}" title="Retirer ce dossier">✕</button>
       </div>
-      <input type="text" data-note="${i}" maxlength="200" placeholder="Commentaire (facultatif)" value="${escapeHtml(s.comment || '')}">
+      <div class="chosen-note">
+        <input type="text" data-note="${i}" maxlength="200" placeholder="Commentaire (facultatif)" value="${escapeHtml(s.comment || '')}">
+        <button type="button" data-clearnote="${i}" title="Effacer le commentaire" style="display:${(s.comment || '').length ? '' : 'none'};">✕</button>
+      </div>
     </div>`;
   }).join('');
 
@@ -1123,7 +1135,20 @@ function renderChosen(){
   });
   // saisie libre : on enregistre au fil de la frappe sans redessiner, pour ne pas perdre le curseur
   el.querySelectorAll('[data-note]').forEach(input=>{
-    input.oninput = ()=>{ editing.selection[parseInt(input.dataset.note,10)].comment = input.value; };
+    const clear = el.querySelector(`[data-clearnote="${input.dataset.note}"]`);
+    input.oninput = ()=>{
+      editing.selection[parseInt(input.dataset.note,10)].comment = input.value;
+      if(clear) clear.style.display = input.value.length ? '' : 'none';
+    };
+  });
+  el.querySelectorAll('[data-clearnote]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const i = parseInt(btn.dataset.clearnote,10);
+      const input = el.querySelector(`[data-note="${i}"]`);
+      editing.selection[i].comment = '';
+      if(input){ input.value = ''; input.focus(); }
+      btn.style.display = 'none';
+    };
   });
 }
 
