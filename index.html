@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<title>Planning 2026 — BAC Audit Conseil</title>
+<title>Planning — BAC Audit Conseil</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
@@ -71,6 +71,10 @@
     border-color:var(--accent);
     color:#fff;
   }
+  /* sélecteur d'année : même barre que les mois, mais visuellement détaché */
+  .months button.year-tab{ font-weight:700; color:var(--navy); }
+  .months button.year-tab.active{ background:var(--navy); border-color:var(--navy); color:#fff; }
+  .months .tab-sep{ width:1px; align-self:stretch; background:var(--line); margin:0 4px; }
   .legend{
     display:flex;
     gap:14px;
@@ -221,7 +225,7 @@
 
 <header>
   <h1>Planning des dossiers — BAC Audit Conseil</h1>
-  <p>Année 2026 — cliquez une case pour affecter un ou plusieurs dossiers. Planning partagé : les modifications de chacun sont visibles par toute l'équipe.</p>
+  <p>Cliquez une case pour affecter un ou plusieurs dossiers. Planning partagé : les modifications de chacun sont visibles par toute l'équipe.</p>
 </header>
 
 <div class="months" id="months"></div>
@@ -261,7 +265,10 @@ const CONFIGURED = SUPABASE_URL.indexOf("VOTRE-PROJET") === -1
                 && typeof window.supabase !== "undefined";
 const sb = CONFIGURED ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
-const YEAR = 2026;
+// Années ouvertes dans le planning. Pour en ajouter une, il suffit de
+// compléter cette liste : clés de stockage, jours fériés et libellés
+// s'adaptent d'eux-mêmes.
+const YEARS = [2026, 2027];
 let EMPLOYEES = ["Amina","Enzo","Ivan","Elodie","Corinne","Candida","Jennifer","Evgenia","Stagiaire"];
 const MONTHS = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 const DOW = ["dim","lun","mar","mer","jeu","ven","sam"];
@@ -270,7 +277,7 @@ const DOSSIERS = ["3T Développement", "A.O.C. Kinés", "Actistream", "Ads Cours
 /* ============================================================
    JOURS FÉRIÉS (France métropolitaine)
    Les fêtes mobiles se calant sur Pâques, on la calcule plutôt
-   que de figer des dates : le tableau reste juste si YEAR change.
+   que de figer des dates : chaque année a son propre tableau.
    ============================================================ */
 function easterSunday(year){
   const a = year % 19, b = Math.floor(year / 100), c = year % 100;
@@ -285,7 +292,10 @@ function easterSunday(year){
   return new Date(year, Math.floor(n / 31) - 1, (n % 31) + 1);
 }
 
-const HOLIDAYS = (()=>{
+const HOLIDAY_CACHE = new Map();
+
+function holidaysFor(year){
+  if(HOLIDAY_CACHE.has(year)) return HOLIDAY_CACHE.get(year);
   const map = new Map();
   const add = (month, day, label)=> map.set(`${month}-${day}`, label);
   add(0, 1,  "Jour de l'An");
@@ -296,17 +306,20 @@ const HOLIDAYS = (()=>{
   add(10, 1, 'Toussaint');
   add(10, 11,'Armistice 1918');
   add(11, 25,'Noël');
-  const easter = easterSunday(YEAR);
+  const easter = easterSunday(year);
   [[1, 'Lundi de Pâques'], [39, 'Ascension'], [50, 'Lundi de Pentecôte']].forEach(([offset, label])=>{
-    const x = new Date(YEAR, easter.getMonth(), easter.getDate() + offset);
+    const x = new Date(year, easter.getMonth(), easter.getDate() + offset);
     add(x.getMonth(), x.getDate(), label);
   });
+  HOLIDAY_CACHE.set(year, map);
   return map;
-})();
+}
 
-function holidayName(month, day){ return HOLIDAYS.get(`${month}-${day}`) || null; }
+function holidayName(month, day, year){ return holidaysFor(year === undefined ? currentYear : year).get(`${month}-${day}`) || null; }
 
-let currentMonth = new Date().getFullYear() === YEAR ? new Date().getMonth() : 0;
+// Année affichée : celle en cours si le planning la couvre, sinon la première.
+let currentYear = YEARS.includes(new Date().getFullYear()) ? new Date().getFullYear() : YEARS[0];
+let currentMonth = new Date().getFullYear() === currentYear ? new Date().getMonth() : 0;
 
 const LOCAL_PREFIX = 'planning2026:';
 let kvOpError = false;   // positionné par kvGet/kvSet en cas d'échec réseau
@@ -609,8 +622,10 @@ async function persistDossierLists(){
 }
 
 async function renameDossierEverywhere(oldName, newName){
+  // toutes les années ouvertes, pas seulement celle affichée
+  for(const y of YEARS){
   for(let m=0; m<12; m++){
-    const val = await kvGet(storageKey(m));
+    const val = await kvGet(storageKey(m, y));
     let data = val ? JSON.parse(val) : null;
     if(!data) continue;
     normalizeMonthData(data);
@@ -629,9 +644,10 @@ async function renameDossierEverywhere(oldName, newName){
       }
     }
     if(changed){
-      await kvSet(storageKey(m), JSON.stringify(data));
-      if(m === currentMonth) monthData = data;
+      await kvSet(storageKey(m, y), JSON.stringify(data));
+      if(y === currentYear && m === currentMonth) monthData = data;
     }
+  }
   }
 }
 
@@ -674,7 +690,8 @@ async function addCustomDossier(name){
   }
 }
 
-function storageKey(m){ return `planning-2026-${String(m+1).padStart(2,'0')}`; }
+// Format inchangé pour 2026 : les données déjà enregistrées restent lisibles.
+function storageKey(m, year){ return `planning-${year === undefined ? currentYear : year}-${String(m+1).padStart(2,'0')}`; }
 
 async function loadEmployees(){
   const val = await kvGet('employes-liste');
@@ -702,8 +719,10 @@ async function removeEmployee(name){
 }
 
 async function renameEmployeeEverywhere(oldName, newName){
+  // toutes les années ouvertes, pas seulement celle affichée
+  for(const y of YEARS){
   for(let m=0; m<12; m++){
-    const val = await kvGet(storageKey(m));
+    const val = await kvGet(storageKey(m, y));
     let data = val ? JSON.parse(val) : null;
     if(!data) continue;
     normalizeMonthData(data);
@@ -720,8 +739,9 @@ async function renameEmployeeEverywhere(oldName, newName){
     }else{
       data[newName] = oldDays;
     }
-    await kvSet(storageKey(m), JSON.stringify(data));
-    if(m === currentMonth) monthData = data;
+    await kvSet(storageKey(m, y), JSON.stringify(data));
+    if(y === currentYear && m === currentMonth) monthData = data;
+  }
   }
 }
 
@@ -740,7 +760,7 @@ async function renameEmployee(oldName, newName){
   await renameEmployeeEverywhere(oldName, newName);
 }
 
-function daysInMonth(m){ return new Date(YEAR, m+1, 0).getDate(); }
+function daysInMonth(m, year){ return new Date(year === undefined ? currentYear : year, m+1, 0).getDate(); }
 
 async function loadMonth(m){
   kvOpError = false;
@@ -778,6 +798,19 @@ function flashSaved(){
 function renderMonthTabs(){
   const wrap = document.getElementById('months');
   wrap.innerHTML = '';
+
+  YEARS.forEach(y=>{
+    const b = document.createElement('button');
+    b.className = 'year-tab';
+    b.textContent = y;
+    if(y === currentYear) b.classList.add('active');
+    b.onclick = ()=> switchYear(y);
+    wrap.appendChild(b);
+  });
+  const sep = document.createElement('span');
+  sep.className = 'tab-sep';
+  wrap.appendChild(sep);
+
   MONTHS.forEach((name, i)=>{
     const b = document.createElement('button');
     b.textContent = name;
@@ -785,6 +818,16 @@ function renderMonthTabs(){
     b.onclick = ()=> switchMonth(i);
     wrap.appendChild(b);
   });
+}
+
+async function switchYear(y){
+  if(y === currentYear) return;
+  currentYear = y;
+  // on retombe sur le mois courant si l'année choisie est celle en cours
+  currentMonth = (new Date().getFullYear() === y) ? new Date().getMonth() : 0;
+  await loadMonth(currentMonth);
+  renderMonthTabs();
+  renderGrid();
 }
 
 async function switchMonth(i){
@@ -800,7 +843,7 @@ function renderGrid(){
   const table = document.getElementById('grid');
   let thead = '<thead><tr><th class="namecol">Employé</th>';
   for(let d=1; d<=nd; d++){
-    const wd = new Date(YEAR, currentMonth, d).getDay();
+    const wd = new Date(currentYear, currentMonth, d).getDay();
     const weekend = (wd===0 || wd===6);
     const holiday = !weekend && holidayName(currentMonth, d);
     thead += `<th class="${weekend?'weekend':(holiday?'holiday':'')}"${holiday?` title="Jour férié — ${escapeHtml(holiday)}"`:''}><span class="dow">${DOW[wd]}</span>${d}</th>`;
@@ -811,7 +854,7 @@ function renderGrid(){
   EMPLOYEES.forEach(emp=>{
     tbody += `<tr><th class="namecol">${emp}</th>`;
     for(let d=1; d<=nd; d++){
-      const wd = new Date(YEAR, currentMonth, d).getDay();
+      const wd = new Date(currentYear, currentMonth, d).getDay();
       const weekend = (wd===0 || wd===6);
       const holiday = !weekend && holidayName(currentMonth, d);
       const list = (monthData[emp] && monthData[emp][d]) ? monthData[emp][d] : [];
@@ -1012,7 +1055,7 @@ async function handleDrop(targetEmp, targetDay, td, e){
       // même ligne : on répartit sur toute la plage de jours entre les deux cases
       const lo = Math.min(srcDay, targetDay), hi = Math.max(srcDay, targetDay);
       for(let d = lo; d <= hi; d++){
-        const wd = new Date(YEAR, currentMonth, d).getDay();
+        const wd = new Date(currentYear, currentMonth, d).getDay();
         if(wd === 0 || wd === 6) continue;
         addAssignment(targetEmp, d, name, type, comment);
       }
@@ -1067,7 +1110,7 @@ function openEditor(emp, day){
   veil.innerHTML = `
     <div class="editor">
       <header>
-        <h2>${escapeHtml(emp)} — ${day} ${MONTHS[currentMonth]} ${YEAR}</h2>
+        <h2>${escapeHtml(emp)} — ${day} ${MONTHS[currentMonth]} ${currentYear}</h2>
         <p style="color:#d7ecef">Recherchez et cochez un ou plusieurs dossiers</p>
       </header>
       <div class="body">
@@ -1220,17 +1263,17 @@ function renderResults(q){
 /* ============================================================
    FICHE D'UN DOSSIER
    Double-clic sur une étiquette : qui travaille dessus, sur
-   quelles dates, sur toute l'année. Les périodes déjà passées
-   sont grisées. Consultable aussi en lecture seule.
+   quelles dates, sur toutes les années ouvertes. Les périodes
+   déjà passées sont grisées. Consultable en lecture seule.
    ============================================================ */
 
 // Deux jours planifiés se suivent si rien ne les sépare, ou seulement un week-end.
-function onlyWeekendBetween(m1, d1, m2, d2){
-  const a = new Date(YEAR, m1, d1), b = new Date(YEAR, m2, d2);
+function onlyWeekendBetween(y1, m1, d1, y2, m2, d2){
+  const a = new Date(y1, m1, d1), b = new Date(y2, m2, d2);
   const gap = Math.round((b - a) / 86400000);
   if(gap <= 0) return false;
   for(let i = 1; i < gap; i++){
-    const w = new Date(YEAR, m1, d1 + i).getDay();
+    const w = new Date(y1, m1, d1 + i).getDay();
     if(w !== 0 && w !== 6) return false;
   }
   return true;
@@ -1238,24 +1281,26 @@ function onlyWeekendBetween(m1, d1, m2, d2){
 
 // Jours isolés → périodes continues de même type de mission.
 function mergeIntoRanges(items){
-  const sorted = items.slice().sort((a,b)=> a.m - b.m || a.d - b.d);
+  const sorted = items.slice().sort((a,b)=> a.y - b.y || a.m - b.m || a.d - b.d);
   const out = [];
   sorted.forEach(it=>{
     const last = out[out.length - 1];
-    if(last && last.type === it.type && last.comment === it.comment && onlyWeekendBetween(last.endM, last.endD, it.m, it.d)){
-      last.endM = it.m; last.endD = it.d; last.days++;
+    if(last && last.type === it.type && last.comment === it.comment
+       && onlyWeekendBetween(last.endY, last.endM, last.endD, it.y, it.m, it.d)){
+      last.endY = it.y; last.endM = it.m; last.endD = it.d; last.days++;
       return;
     }
-    out.push({ startM: it.m, startD: it.d, endM: it.m, endD: it.d, type: it.type, comment: it.comment, days: 1 });
+    out.push({ startY: it.y, startM: it.m, startD: it.d, endY: it.y, endM: it.m, endD: it.d,
+               type: it.type, comment: it.comment, days: 1 });
   });
   return out;
 }
 
 function pad2(n){ return String(n).padStart(2, '0'); }
-function formatDate(month, day){ return `${pad2(day)}/${pad2(month + 1)}/${YEAR}`; }
+function formatDate(year, month, day){ return `${pad2(day)}/${pad2(month + 1)}/${year}`; }
 
 function formatRange(r){
-  const from = formatDate(r.startM, r.startD), to = formatDate(r.endM, r.endD);
+  const from = formatDate(r.startY, r.startM, r.startD), to = formatDate(r.endY, r.endM, r.endD);
   return from === to ? from : `${from} → ${to}`;
 }
 
@@ -1265,25 +1310,27 @@ function todayMidnight(){
   return t;
 }
 
-// { emp: [ {m,d,type} ] } pour un dossier, sur les 12 mois.
+// { emp: [ {y,m,d,type} ] } pour un dossier, sur toutes les années ouvertes.
 function collectDossierOccurrences(monthValues, name){
   const target = name.toLowerCase();
   const byEmp = {};
-  for(let m = 0; m < 12; m++){
-    const val = monthValues[storageKey(m)];
-    if(!val) continue;
-    let data;
-    try{ data = normalizeMonthData(JSON.parse(val)); }catch(e){ continue; }
-    Object.keys(data).forEach(emp=>{
-      Object.keys(data[emp]).forEach(day=>{
-        (data[emp][day] || []).forEach(item=>{
-          if(item.name && item.name.toLowerCase() === target){
-            (byEmp[emp] = byEmp[emp] || []).push({ m, d: parseInt(day, 10), type: item.type || DEFAULT_MISSION, comment: (item.comment || '').trim() });
-          }
+  YEARS.forEach(y=>{
+    for(let m = 0; m < 12; m++){
+      const val = monthValues[storageKey(m, y)];
+      if(!val) continue;
+      let data;
+      try{ data = normalizeMonthData(JSON.parse(val)); }catch(e){ continue; }
+      Object.keys(data).forEach(emp=>{
+        Object.keys(data[emp]).forEach(day=>{
+          (data[emp][day] || []).forEach(item=>{
+            if(item.name && item.name.toLowerCase() === target){
+              (byEmp[emp] = byEmp[emp] || []).push({ y, m, d: parseInt(day, 10), type: item.type || DEFAULT_MISSION, comment: (item.comment || '').trim() });
+            }
+          });
         });
       });
-    });
-  }
+    }
+  });
   return byEmp;
 }
 
@@ -1299,7 +1346,7 @@ function renderDossierPlanning(name, byEmp){
 
   if(!emps.length){
     sum.textContent = 'Aucune journée planifiée cette année';
-    el.innerHTML = '<div class="disabled">Ce dossier n\'est planifié nulle part en ' + YEAR + '</div>';
+    el.innerHTML = '<div class="disabled">Ce dossier n\'est planifié nulle part en ' + YEARS.join(' ni en ') + '</div>';
     return;
   }
 
@@ -1312,8 +1359,8 @@ function renderDossierPlanning(name, byEmp){
     totalDays += days;
 
     const lines = ranges.map(r=>{
-      const start = new Date(YEAR, r.startM, r.startD);
-      const end = new Date(YEAR, r.endM, r.endD);
+      const start = new Date(r.startY, r.startM, r.startD);
+      const end = new Date(r.endY, r.endM, r.endD);
       const past = end < today;
       const ongoing = start <= today && today <= end;
       if(!past && (!upcoming || start < upcoming)) upcoming = start;
@@ -1340,9 +1387,9 @@ function renderDossierPlanning(name, byEmp){
 
   el.innerHTML = rows;
   const next = upcoming
-    ? ` · prochaine date le ${formatDate(upcoming.getMonth(), upcoming.getDate())}`
+    ? ` · prochaine date le ${formatDate(upcoming.getFullYear(), upcoming.getMonth(), upcoming.getDate())}`
     : ' · rien à venir';
-  sum.textContent = `${emps.length} personne${emps.length > 1 ? 's' : ''} · ${totalDays} jour${totalDays > 1 ? 's' : ''} planifié${totalDays > 1 ? 's' : ''} en ${YEAR}${next}`;
+  sum.textContent = `${emps.length} personne${emps.length > 1 ? 's' : ''} · ${totalDays} jour${totalDays > 1 ? 's' : ''} planifié${totalDays > 1 ? 's' : ''} sur ${YEARS.join(' et ')}${next}`;
 }
 
 async function openDossierPlanning(name){
@@ -1375,7 +1422,7 @@ async function openDossierPlanning(name){
   document.addEventListener('keydown', esc);
 
   const keys = [];
-  for(let m = 0; m < 12; m++) keys.push(storageKey(m));
+  YEARS.forEach(y=>{ for(let m = 0; m < 12; m++) keys.push(storageKey(m, y)); });
   const values = await kvGetMany(keys);
   if(!document.getElementById('veilDossier')) return; // fermé entre-temps
 
@@ -1731,7 +1778,7 @@ async function commitEditor(){
 
     if(doExtend && !isNaN(extendEnd) && extendEnd > day && selection.length){
       for(let d = day + 1; d <= extendEnd; d++){
-        const wd = new Date(YEAR, currentMonth, d).getDay();
+        const wd = new Date(currentYear, currentMonth, d).getDay();
         if(skipWeekend && (wd === 0 || wd === 6)) continue;
         const current = monthData[emp][d] || [];
         const merged = [...current];
